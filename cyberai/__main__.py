@@ -6,25 +6,31 @@ from cyberai.defense import analyze_log
 from cyberai.llm import ModelError, ask_cloud, ask_local
 from cyberai.memory import MemoryStore
 from cyberai.research import fetch_public_page
+from cyberai.response import get_playbook
 
 ROOT = Path(__file__).resolve().parent.parent
 MEMORY = MemoryStore(ROOT / "data" / "memory.db")
 AUDIT = AuditLog(ROOT / "logs" / "audit.jsonl")
 LOG_DIR = ROOT / "logs"
 
+
 def help_text() -> str:
     return """Commands:
   /remember TEXT      Save a note to local SQLite memory
   /memory KEYWORDS    Search saved notes
   /analyze-log FILE   Analyze a .log/.txt file inside logs/
+  /incident TYPE      Show an incident-response checklist
   /research HTTPS_URL Fetch a page from an allowlisted documentation host
   /cloud TEXT         Send a prompt to the configured cloud model
   /help               Show commands
   /quit               Exit
+Incident types: social-account-compromise, email-compromise,
+                windows-suspicious-activity, phishing
 Normal text uses the local Ollama model."""
 
+
 def main() -> None:
-    print("CyberAI 0.1 | defensive research starter")
+    print("CyberAI 0.2 | defensive research and incident-response assistant")
     print(help_text())
     while True:
         try:
@@ -54,6 +60,10 @@ def main() -> None:
                 MEMORY.remember(json.dumps(result, ensure_ascii=False), "log_analysis")
                 AUDIT.write("log_analyzed", file=result["file"], matches=result["lines_with_indicators"])
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+            elif line.startswith("/incident "):
+                result = get_playbook(line[len("/incident "):].strip())
+                AUDIT.write("incident_playbook_shown", incident_type=result["type"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
             elif line.startswith("/research "):
                 result = fetch_public_page(line[len("/research "):].strip())
                 MEMORY.remember(f"Source: {result['url']}\nContent: {result['text'][:7000]}", "research")
@@ -70,6 +80,7 @@ def main() -> None:
         except (ValueError, ModelError, RuntimeError) as exc:
             print(f"Error: {exc}")
             AUDIT.write("operation_error", error_type=type(exc).__name__)
+
 
 if __name__ == "__main__":
     main()
