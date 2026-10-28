@@ -783,6 +783,7 @@ class CaseworkWindow:
             ("VERIFY HASHES", self.verify_hashes, CYAN),
             ("CORRELATIONS", self.show_correlations, TEAL),
             ("TIMELINE", self.show_timeline, WHITE),
+            ("EVIDENCE TIMELINE", self.show_evidence_timeline, CYAN),
             ("EXPORT CASE REPORT", self.export_case_report, GREEN),
             ("EXPORT AUDIT", self.export_audit, VIOLET),
         ]
@@ -1094,6 +1095,52 @@ class CaseworkWindow:
             return
         self._load_case()
         self.notebook.select(self.timeline_tab)
+
+    def show_evidence_timeline(self):
+        case_id = self._require_case()
+        if not case_id:
+            return
+        try:
+            analysis = self.store.evidence_timeline(case_id)
+            rows: list[tuple[float, tuple[str, str, str, str]]] = []
+            for item in self.store.timeline(case_id):
+                try:
+                    epoch = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    epoch = 0.0
+                details = json.dumps(item["details"], ensure_ascii=False, sort_keys=True)
+                rows.append((epoch, (
+                    item["timestamp"], item["event"], item["actor"], details[:400],
+                )))
+            for event in analysis["events"]:
+                shown_time = event["timestamp_utc"] or f"TZ UNKNOWN • {event['timestamp_raw']}"
+                details = (
+                    f"{event['filename']}:L{event['line_number']} • {event['timezone_status']} • "
+                    f"{event['parser']} • {event['context']}"
+                )
+                if event["indicators"]:
+                    labels = ", ".join(
+                        f"{entry['indicator_type']}={entry['value']}" for entry in event["indicators"][:5]
+                    )
+                    details += f" • indicators: {labels}"
+                rows.append((event["_sort_epoch"], (
+                    shown_time, "EVIDENCE_TIMESTAMP", f"{event['evidence_id']}:L{event['line_number']}", details[:400],
+                )))
+            self._clear_tree(self.timeline_tree)
+            for _epoch, values in sorted(rows, key=lambda row: row[0]):
+                self.timeline_tree.insert("", "end", values=values)
+            self.notebook.select(self.timeline_tab)
+            self.status_bar.configure(
+                text=(
+                    f"Evidence timeline: {analysis['event_count']} timestamped event(s) from "
+                    f"{analysis['evidence_files_scanned']} verified text file(s); "
+                    f"{len(analysis['timeline_correlation_leads'])} cross-file lead(s), "
+                    f"{len(analysis['warnings'])} warning(s). "
+                    "Timezone-unknown rows have approximate ordering only."
+                )
+            )
+        except Exception as exc:
+            messagebox.showerror("Evidence timeline failed", str(exc), parent=self.window)
 
     def export_case_report(self):
         case_id = self._require_case()
