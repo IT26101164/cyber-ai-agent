@@ -1427,7 +1427,7 @@ class CaseworkWindow:
         except Exception:
             pass
         try:
-            self.phone_intelligence_window = PhoneIntelligenceWindow(self.window, self.store, case_id)
+            self.phone_intelligence_window = PhoneIntelligenceWindow(self.window, self.store, case_id, on_change=self.refresh_cases)
         except Exception as exc:
             messagebox.showerror("Phone Intelligence", str(exc), parent=self.window)
 
@@ -1472,6 +1472,305 @@ class CaseworkWindow:
             return
         messagebox.showinfo("Audit exported", f"Exported {count} audit event(s).\nUse Audit Chain VALID to check the local event chain before export.", parent=self.window)
         self.status_bar.configure(text=f"Audit JSONL exported to {destination}.")
+
+
+class PhoneIntelligenceWindow:
+    """Manual phone-lead and authorized location-evidence desk; no remote device access."""
+
+    def __init__(self, master: Any, store: CaseStore, case_id: str, on_change: Any = None):
+        if tk is None or ttk is None:
+            raise RuntimeError("Tkinter is not available in this Python installation.")
+        self.store = store
+        self.case_id = case_id
+        self.on_change = on_change
+        self.window = tk.Toplevel(master)
+        self.window.title("CYBERAI JARVIS • Phone Intelligence Desk")
+        self.window.geometry("1120x760")
+        self.window.minsize(880, 620)
+        self.window.configure(bg=BG)
+        self._build()
+        self.load_case(case_id)
+
+    def _label(self, parent: Any, text: str, color: str = WHITE, size: int = 9, bold: bool = False):
+        return tk.Label(
+            parent, text=text, bg=parent.cget("bg"), fg=color,
+            font=("Segoe UI", size, "bold" if bold else "normal"),
+            anchor="w", justify="left",
+        )
+
+    def _entry(self, parent: Any, width: int = 24):
+        return tk.Entry(
+            parent, width=width, bg=PANEL_ALT, fg=WHITE, insertbackground=TEAL,
+            relief="flat", highlightthickness=1, highlightbackground=EDGE,
+            highlightcolor=TEAL, font=("Consolas", 9),
+        )
+
+    def _combo(self, parent: Any, values: tuple[str, ...], width: int = 30):
+        widget = ttk.Combobox(parent, values=values, state="readonly", width=width, font=("Segoe UI", 9))
+        if values:
+            widget.current(0)
+        return widget
+
+    def _button(self, parent: Any, text: str, command: Any, color: str = TEAL):
+        return tk.Button(
+            parent, text=text, command=command, bg=PANEL_ALT, fg=color,
+            activebackground=EDGE_BRIGHT, activeforeground=WHITE,
+            relief="flat", bd=0, padx=10, pady=6,
+            font=("Segoe UI", 8, "bold"), cursor="hand2",
+        )
+
+    def _tree(self, parent: Any, columns: tuple[str, ...]):
+        wrapper = tk.Frame(parent, bg=PANEL)
+        wrapper.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        tree = ttk.Treeview(wrapper, columns=columns, show="headings", style="Case.Treeview", height=8)
+        vertical = ttk.Scrollbar(wrapper, orient="vertical", command=tree.yview)
+        horizontal = ttk.Scrollbar(wrapper, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        wrapper.grid_rowconfigure(0, weight=1)
+        wrapper.grid_columnconfigure(0, weight=1)
+        for column in columns:
+            tree.heading(column, text=column.replace("_", " ").upper())
+            tree.column(column, width=130, minwidth=80, anchor="w", stretch=True)
+        return tree
+
+    def _build(self):
+        outer = tk.Frame(self.window, bg=BG, padx=12, pady=10)
+        outer.pack(fill="both", expand=True)
+        self._label(outer, "CYBERAI  /  PHONE INTELLIGENCE", TEAL, 9, True).pack(anchor="w")
+        self.case_heading = self._label(outer, "Case", WHITE, 17, True)
+        self.case_heading.pack(anchor="w", pady=(2, 2))
+        self._label(
+            outer,
+            "LOCAL-ONLY • No number lookup, live tracking, phishing control or remote device access.",
+            AMBER, 8, True,
+        ).pack(anchor="w", pady=(0, 8))
+        self._label(
+            outer,
+            "Location entries require an explicit authority/consent reference and a same-case imported file whose SHA-256 matches.",
+            MUTED, 8,
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.notebook = ttk.Notebook(outer, style="Case.TNotebook")
+        self.notebook.pack(fill="both", expand=True)
+        leads_tab = tk.Frame(self.notebook, bg=BG)
+        locations_tab = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(leads_tab, text="  PHONE NUMBER LEADS  ")
+        self.notebook.add(locations_tab, text="  AUTHORIZED LOCATION RECORDS  ")
+
+        form = tk.Frame(leads_tab, bg=PANEL, padx=10, pady=8, highlightthickness=1, highlightbackground=EDGE)
+        form.pack(fill="x", padx=6, pady=6)
+        self.phone_number_entry = self._entry(form, 25)
+        self.lead_status_combo = self._combo(form, PHONE_LEAD_STATUSES, 25)
+        self.phone_source_entry = self._entry(form, 42)
+        self.phone_legal_combo = self._combo(form, PHONE_LEGAL_BASES, 38)
+        self.phone_authority_entry = self._entry(form, 42)
+        self.phone_notes_entry = self._entry(form, 55)
+        fields = [
+            ("PHONE NUMBER (E.164)", self.phone_number_entry, 0, 0),
+            ("LEAD CLASSIFICATION (NOT A GUILT FINDING)", self.lead_status_combo, 0, 2),
+            ("LEAD SOURCE / PROVENANCE", self.phone_source_entry, 1, 0),
+            ("LEGAL / CONSENT BASIS", self.phone_legal_combo, 1, 2),
+            ("AUTHORITY / REQUEST REFERENCE (WHEN APPLICABLE)", self.phone_authority_entry, 2, 0),
+            ("SHORT NOTE", self.phone_notes_entry, 2, 2),
+        ]
+        for label, widget, row, col in fields:
+            self._label(form, label, MUTED, 7, True).grid(row=row * 2, column=col, sticky="w", padx=(0, 8), pady=(2, 0))
+            widget.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, 8), pady=(0, 4))
+        form.grid_columnconfigure(0, weight=2)
+        form.grid_columnconfigure(2, weight=3)
+        lead_actions = tk.Frame(leads_tab, bg=BG)
+        lead_actions.pack(fill="x", padx=6, pady=(0, 4))
+        self._button(lead_actions, "+ ADD PHONE LEAD", self.add_phone_lead, GREEN).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "REFRESH", self.refresh, CYAN).pack(side="left")
+        self.phone_tree = self._tree(leads_tab, ("phone_id", "phone_number", "lead_status", "legal_basis", "source_label", "created_at"))
+        self.phone_tree.bind("<<TreeviewSelect>>", self._on_phone_select)
+        self._label(
+            leads_tab,
+            "Numbers are stored in this local case database. Adding one does not contact it, locate it, or establish who owns it.",
+            MUTED, 8,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+
+        loc_form = tk.Frame(locations_tab, bg=PANEL, padx=10, pady=8, highlightthickness=1, highlightbackground=EDGE)
+        loc_form.pack(fill="x", padx=6, pady=6)
+        self.location_time_entry = self._entry(loc_form, 34)
+        self.location_time_entry.insert(0, datetime.now().astimezone().isoformat(timespec="seconds"))
+        self.latitude_entry = self._entry(loc_form, 14)
+        self.longitude_entry = self._entry(loc_form, 14)
+        self.accuracy_entry = self._entry(loc_form, 12)
+        self.location_source_combo = self._combo(loc_form, LOCATION_SOURCES, 30)
+        self.location_legal_combo = self._combo(loc_form, LOCATION_LEGAL_BASES, 30)
+        self.location_authority_entry = self._entry(loc_form, 32)
+        self.evidence_combo = self._combo(loc_form, (), 52)
+        self.location_notes_entry = self._entry(loc_form, 45)
+        loc_fields = [
+            ("OBSERVED TIME (ISO-8601 WITH TIMEZONE)", self.location_time_entry, 0, 0),
+            ("LATITUDE", self.latitude_entry, 0, 2),
+            ("LONGITUDE", self.longitude_entry, 0, 4),
+            ("ACCURACY METRES (OPTIONAL)", self.accuracy_entry, 0, 6),
+            ("RECORD SOURCE", self.location_source_combo, 1, 0),
+            ("LEGAL / CONSENT BASIS", self.location_legal_combo, 1, 2),
+            ("AUTHORITY / REQUEST REFERENCE (REQUIRED)", self.location_authority_entry, 1, 4),
+            ("IMPORTED EVIDENCE FILE (REQUIRED)", self.evidence_combo, 2, 0),
+            ("NOTE", self.location_notes_entry, 2, 4),
+        ]
+        for label, widget, row, col in loc_fields:
+            self._label(loc_form, label, MUTED, 7, True).grid(row=row * 2, column=col, sticky="w", padx=(0, 8), pady=(2, 0))
+            widget.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, 8), pady=(0, 4))
+        for col in (0, 2, 4, 6):
+            loc_form.grid_columnconfigure(col, weight=1)
+        loc_actions = tk.Frame(locations_tab, bg=BG)
+        loc_actions.pack(fill="x", padx=6, pady=(0, 4))
+        self._button(loc_actions, "+ ADD AUTHORIZED LOCATION RECORD", self.add_location_record, GREEN).pack(side="left", padx=(0, 6))
+        self._button(loc_actions, "OPEN SELECTED ON MAP", self.open_selected_map, CYAN).pack(side="left", padx=(0, 6))
+        self._button(loc_actions, "REFRESH", self.refresh, WHITE).pack(side="left")
+        self.location_tree = self._tree(
+            locations_tab,
+            ("location_id", "observed_at_utc", "phone_number", "coordinates", "accuracy_m", "source_label", "evidence_id"),
+        )
+        self._label(
+            locations_tab,
+            "Coordinates come only from manually entered source records; the app does not find a phone's location from its number.",
+            MUTED, 8,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        self.status_bar = self._label(outer, "Ready • choose a case record and use evidence you are authorized to hold.", MUTED, 8)
+        self.status_bar.pack(fill="x", pady=(8, 0))
+
+    def load_case(self, case_id: str):
+        self.case_id = case_id
+        case = self.store.get_case(case_id)
+        self.case_heading.configure(text=f"{case['case_id']}  •  {case['title']}")
+        self.refresh()
+
+    def refresh(self):
+        if not self.window.winfo_exists():
+            return
+        self._clear_tree(self.phone_tree)
+        leads = self.store.list_phone_leads(self.case_id)
+        for item in leads:
+            self.phone_tree.insert("", "end", iid=item["phone_id"], values=(
+                item["phone_id"], item["phone_number"], item["lead_status"],
+                item["legal_basis"], item["source_label"], item["created_at"],
+            ))
+        evidence = self.store.list_evidence(self.case_id)
+        self.evidence_display_to_id = {}
+        evidence_labels = []
+        for item in evidence:
+            label = f"{item['evidence_id']} | {item['original_name']}"
+            evidence_labels.append(label)
+            self.evidence_display_to_id[label] = item["evidence_id"]
+        self.evidence_combo.configure(values=evidence_labels)
+        if evidence_labels and self.evidence_combo.get() not in evidence_labels:
+            self.evidence_combo.set(evidence_labels[0])
+        elif not evidence_labels:
+            self.evidence_combo.set("")
+        self._clear_tree(self.location_tree)
+        for item in self.store.list_location_records(self.case_id):
+            self.location_tree.insert("", "end", iid=item["location_id"], values=(
+                item["location_id"], item["observed_at_utc"], item["phone_number"],
+                f"{item['latitude']:.6f}, {item['longitude']:.6f}",
+                "" if item["accuracy_m"] is None else f"{item['accuracy_m']:g}",
+                item["source_label"], item["evidence_id"],
+            ))
+        self.status_bar.configure(
+            text=f"{len(leads)} phone lead(s) • {len(self.store.list_location_records(self.case_id))} authorized location record(s) • local storage only"
+        )
+
+    def _selected_phone(self) -> str | None:
+        selected = self.phone_tree.selection()
+        return selected[0] if selected else None
+
+    def _on_phone_select(self, _event=None):
+        phone_id = self._selected_phone()
+        if phone_id:
+            self.notebook.select(1)
+
+    def add_phone_lead(self):
+        try:
+            item = self.store.add_phone_lead(
+                self.case_id, self.phone_number_entry.get(), self.phone_source_entry.get(),
+                self.lead_status_combo.get(), self.phone_legal_combo.get(),
+                self.phone_authority_entry.get(), self.phone_notes_entry.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Phone lead could not be added", str(exc), parent=self.window)
+            return
+        self.phone_number_entry.delete(0, "end")
+        self.phone_source_entry.delete(0, "end")
+        self.phone_authority_entry.delete(0, "end")
+        self.phone_notes_entry.delete(0, "end")
+        self.refresh()
+        self.phone_tree.selection_set(item["phone_id"])
+        self.phone_tree.focus(item["phone_id"])
+        if self.on_change:
+            self.on_change(self.case_id)
+        messagebox.showinfo(
+            "Phone lead recorded",
+            f"Record: {item['phone_id']}\\nNumber saved locally: {item['phone_number']}\\n\\nNo lookup or device connection was attempted.",
+            parent=self.window,
+        )
+
+    def add_location_record(self):
+        phone_id = self._selected_phone()
+        if not phone_id:
+            messagebox.showwarning("Select a phone lead", "Select the phone lead from the Phone Number Leads tab first.", parent=self.window)
+            self.notebook.select(0)
+            return
+        evidence_id = self.evidence_display_to_id.get(self.evidence_combo.get(), "")
+        try:
+            item = self.store.add_location_record(
+                self.case_id, phone_id, self.location_time_entry.get(),
+                self.latitude_entry.get(), self.longitude_entry.get(),
+                self.location_source_combo.get(), self.location_legal_combo.get(),
+                self.location_authority_entry.get(), evidence_id,
+                self.accuracy_entry.get(), self.location_notes_entry.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Location record could not be added", str(exc), parent=self.window)
+            return
+        self.location_notes_entry.delete(0, "end")
+        self.refresh()
+        self.location_tree.selection_set(item["location_id"])
+        self.location_tree.focus(item["location_id"])
+        self.notebook.select(1)
+        if self.on_change:
+            self.on_change(self.case_id)
+        messagebox.showinfo(
+            "Location evidence recorded",
+            f"Record: {item['location_id']}\\nObserved (UTC): {item['observed_at_utc']}\\n"
+            f"Evidence: {item['evidence_id']} / {item['evidence_sha256']}\\n\\n"
+            "This records coordinates already present in authorized evidence; it does not locate a phone.",
+            parent=self.window,
+        )
+
+    def open_selected_map(self):
+        selected = self.location_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select a location record", "Select a location record to continue.", parent=self.window)
+            return
+        try:
+            item = self.store.get_location_record(selected[0])
+            url = openstreetmap_url(item["latitude"], item["longitude"])
+            confirmed = messagebox.askyesno(
+                "Open external map?",
+                "Open these recorded coordinates in OpenStreetMap?\n\n"
+                "The map service will receive the coordinates and may process connection metadata. "
+                "Only continue if sharing these coordinates with the external service is approved.",
+                parent=self.window,
+            )
+            if not confirmed:
+                return
+            self.store.record_location_map_opened(item["location_id"])
+            opened = webbrowser.open(url)
+            if not opened:
+                messagebox.showwarning("Map did not open", "The browser did not confirm opening the map URL.", parent=self.window)
+                return
+            self.status_bar.configure(text=f"Opened external map for {item['location_id']} after operator confirmation.")
+        except Exception as exc:
+            messagebox.showerror("Could not open map", str(exc), parent=self.window)
+
 
 
 def open_casework(master: Any, data_dir: str | Path | None = None) -> CaseworkWindow:
