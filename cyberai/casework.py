@@ -494,6 +494,62 @@ class CaseStore:
             checked += 1
         return {"ok": True, "checked": checked, "last_hash": previous}
 
+    def export_case_report(self, case_id: str, destination: str | Path) -> dict[str, Any]:
+        """Export a structured case report locally; evidence file contents are not copied into the report."""
+        case = self.case_summary(case_id)
+        target = Path(destination).expanduser().resolve()
+        vault_root = self.vault_dir.resolve()
+        if target == self.db_path.resolve() or vault_root == target or vault_root in target.parents:
+            raise ValueError("Choose a report destination outside the case database and evidence vault.")
+        if target.exists():
+            raise FileExistsError("Report destination already exists. Choose a new filename to avoid overwriting data.")
+
+        evidence = []
+        for item in self.list_evidence(case_id):
+            evidence.append({
+                key: item[key] for key in (
+                    "evidence_id", "original_name", "sha256", "size_bytes", "media_type",
+                    "source_label", "description", "collected_at", "added_by",
+                )
+            })
+        report = {
+            "report_schema": "cyberai.case-report.v1",
+            "exported_at_utc": utc_now(),
+            "case": case,
+            "evidence": evidence,
+            "indicators": self.list_indicators(case_id),
+            "repeated_indicator_leads": self.correlations(case_id),
+            "investigator_notes": self.list_notes(case_id),
+            "case_audit_timeline": self.timeline(case_id),
+            "interpretation_guardrails": [
+                "An indicator match is an investigative lead, not attribution to a person.",
+                "A shared IP address or domain does not establish common ownership or intent.",
+                "SHA-256 confirms the exported/stored copy matches the recorded digest, not source authenticity or legal admissibility.",
+                "The report contains case metadata and analysis output, not the original evidence file contents.",
+            ],
+            "limitations": [
+                "This report reflects only locally imported evidence and recorded notes at export time.",
+                "No provider, telecom, finance, social platform, geolocation, or external threat-intelligence service was queried.",
+                "The local audit chain is tamper-evident but not digitally signed.",
+            ],
+        }
+        payload = (json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            with temp.open("xb") as stream:
+                stream.write(payload)
+            temp.replace(target)
+        finally:
+            temp.unlink(missing_ok=True)
+        report_hash = hashlib.sha256(payload).hexdigest()
+        with self._write() as con:
+            self._event(con, "CASE_REPORT_EXPORTED", case_id, {
+                "report_filename": target.name, "report_sha256": report_hash,
+                "report_bytes": len(payload), "timeline_includes_export_event": False,
+            })
+        return {"case_id": case_id, "path": str(target), "sha256": report_hash, "size_bytes": len(payload)}
+
     def export_audit(self, destination: str | Path) -> int:
         target = Path(destination).expanduser()
         with closing(self._connect()) as con:
@@ -561,7 +617,7 @@ class CaseworkWindow:
         self.integrity_label.pack(side="right", anchor="center")
         actions = tk.Frame(outer, bg=BG)
         actions.pack(fill="x", pady=(0, 8))
-        for label, command, color in [
+        action_items = [
             ("+ NEW CASE", self.new_case, TEAL),
             ("IMPORT EVIDENCE", self.import_evidence, GREEN),
             ("ADD NOTE", self.add_note, WHITE),
@@ -569,9 +625,15 @@ class CaseworkWindow:
             ("VERIFY HASHES", self.verify_hashes, CYAN),
             ("CORRELATIONS", self.show_correlations, TEAL),
             ("TIMELINE", self.show_timeline, WHITE),
+            ("EXPORT CASE REPORT", self.export_case_report, GREEN),
             ("EXPORT AUDIT", self.export_audit, VIOLET),
-        ]:
-            self._button(actions, label, command, color).pack(side="left", padx=(0, 4))
+        ]
+        for column in range(5):
+            actions.grid_columnconfigure(column, weight=1, uniform="actions")
+        for index, (label, command, color) in enumerate(action_items):
+            self._button(actions, label, command, color).grid(
+                row=index // 5, column=index % 5, sticky="ew", padx=2, pady=2,
+            )
         body = tk.Frame(outer, bg=BG)
         body.pack(fill="both", expand=True)
         body.grid_columnconfigure(0, weight=3, uniform="columns")
@@ -874,6 +936,33 @@ class CaseworkWindow:
             return
         self._load_case()
         self.notebook.select(self.timeline_tab)
+
+    def export_case_report(self):
+        case_id = self._require_case()
+        if not case_id:
+            return
+        destination = filedialog.asksaveasfilename(
+            parent=self.window, title="Export structured case report",
+            defaultextension=".json", filetypes=[("JSON report", "*.json"), ("All files", "*.*")],
+            initialfile=f"{case_id}_report.json",
+        )
+        if not destination:
+            return
+        try:
+            result = self.store.export_case_report(case_id, destination)
+        except Exception as exc:
+            messagebox.showerror("Case report export failed", str(exc), parent=self.window)
+            return
+        self.refresh_cases(case_id)
+        messagebox.showinfo(
+            "Case report exported",
+            f"Report: {result['path']}\nSHA-256: {result['sha256']}\n"
+            f"Size: {result['size_bytes']:,} bytes\n\n"
+            "The report contains case metadata and analysis output, not original evidence contents. "
+            "The export event is in the live audit log; the exported timeline is a snapshot from before that event.",
+            parent=self.window,
+        )
+        self.status_bar.configure(text=f"Case report exported • SHA-256 {result['sha256']}")
 
     def export_audit(self):
         destination = filedialog.asksaveasfilename(
