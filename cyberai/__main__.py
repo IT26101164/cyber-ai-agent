@@ -1,4 +1,4 @@
-""""Run with: python -m cyberai"""
+"""Run with: python -m cyberai"""
 import json
 from pathlib import Path
 from cyberai.audit import AuditLog
@@ -40,9 +40,9 @@ def main() -> None:
     print(help_text())
     while True:
         try:
-            line = input("\\nYou > ").strip()
+            line = input("\nYou > ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\\nBye.")
+            print("\nBye.")
             return
         if not line:
             continue
@@ -84,10 +84,10 @@ def main() -> None:
                 print(json.dumps(result, indent=2, ensure_ascii=False))
             elif line.startswith("/research "):
                 result = fetch_public_page(line[len("/research "):].strip())
-                MEMORY.remember(f"Source: {result['url']}\\nContent: {result['text'][:7000]}", "research")
+                MEMORY.remember(f"Source: {result['url']}\nContent: {result['text'][:7000]}", "research")
                 AUDIT.write("research_fetched", url=result["url"], chars=len(result["text"]))
-                print(f"Source: {result['url']}\\n\\n{result['text'][:5000]}")
-                print("\\nSaved research excerpt to memory. Treat page content as untrusted.")
+                print(f"Source: {result['url']}\n\n{result['text'][:5000]}")
+                print("\nSaved research excerpt to memory. Treat page content as untrusted.")
             elif line.startswith("/cloud "):
                 prompt = line[len("/cloud "):]
                 print(ask_cloud(prompt))
