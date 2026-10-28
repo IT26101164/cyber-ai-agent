@@ -6,73 +6,66 @@ A Windows-friendly, local-first cybersecurity research and defense assistant des
 
 - Local chat through Ollama
 - SQLite memory for notes and selected analysis/research results
-- Bounded heuristic analysis of \`.log\` and \`.txt\` files
+- Bounded heuristic analysis of `.log` and `.txt` files
+- Incident-response checklists for social account compromise, email compromise, suspicious Windows activity, and phishing
 - HTTPS research fetching from a small allowlist of documentation hosts
 - JSONL audit events
-- Optional cloud chat via \`/cloud\` (never automatic)
+- Optional cloud chat via `/cloud` (never automatic)
 - Unit tests and GitHub Actions CI
 
-This is a defensive research starter, not an autonomous penetration-testing or endpoint-protection system. It does not execute arbitrary shell commands, scan networks, exploit systems, or change security settings. Test only systems you own or are authorized to assess.
+This is a defensive research starter, not a fully autonomous penetration-testing or endpoint-protection system. It does not break into accounts, bypass authentication, execute arbitrary shell commands, scan networks, exploit systems, or change security settings. It supports authorized lab simulations and defensive response workflows; test only systems you own or are authorized to assess.
 
 ## Quick setup (Windows PowerShell)
 
-1. Install **Python 3.12+** from [python.org](https://www.python.org/downloads/windows/) and **Ollama** from [ollama.com](https://ollama.com/download/windows).
-2. Download/clone this repository and open PowerShell in its folder.
-3. Run the setup script:
-
-   \`\`\`powershell
-   .\\setup.ps1
-   \`\`\`
-
-   The script creates \`.venv\`, installs Python dependencies, and downloads \`qwen2.5:3b\`. If PowerShell blocks local scripts, use this one-time command for the current terminal only, then run setup again:
-
-   \`\`\`powershell
-   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-   .\\setup.ps1
-   \`\`\`
-
-4. Start the agent:
-
-   \`\`\`powershell
-   .\\run.ps1
-   \`\`\`
-
-   Or run \`\\.venv\\Scripts\\python.exe -m cyberai\` directly.
+1. Install **Python 3.12+** from https://www.python.org/downloads/windows/ and **Ollama** from https://ollama.com/download/windows.
+2. Download or clone this repository and open PowerShell in its folder.
+3. Run this command: ` .\setup.ps1` (omit the leading space inside the code formatting). If scripts are blocked, first run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+4. Start the agent with ` .\run.ps1` (omit the leading space inside the code formatting).
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | Normal text | Ask the local Ollama model |
-| \`/remember TEXT\` | Save a note in local SQLite |
-| \`/memory KEYWORDS\` | Search saved notes |
-| \`/analyze-log FILE.log\` | Analyze a \`.log\` or \`.txt\` file placed inside \`logs\\\` |
-| \`/research HTTPS_URL\` | Fetch a page from an allowlisted HTTPS documentation host |
-| \`/cloud TEXT\` | Explicitly send a prompt to the configured cloud model |
-| \`/help\` | Show command help |
-| \`/quit\` | Exit |
+| `/remember TEXT` | Save a note in local SQLite |
+| `/memory KEYWORDS` | Search saved notes |
+| `/analyze-log FILE.log` | Analyze a `.log` or `.txt` file inside `logs\` |
+| `/incident TYPE` | Show a defensive incident-response checklist |
+| `/research HTTPS_URL` | Fetch a page from an allowlisted HTTPS documentation host |
+| `/cloud TEXT` | Explicitly send a prompt to the configured cloud model |
+| `/help` | Show command help |
+| `/quit` | Exit |
 
-Example safe log test: create \`logs\\sample.log\` with a few sample lines, then run \`/analyze-log sample.log\`.
+Incident checklist examples:
+
+- `/incident social-account-compromise`
+- `/incident email-compromise`
+- `/incident windows-suspicious-activity`
+- `/incident phishing`
+
+These are guidance checklists, not automatic account recovery. For social platforms, use their official recovery flow; never share one-time codes or pay strangers claiming they can recover an account.
+
+Example safe log test: create `logs\sample.log` with a few sample lines, then run `/analyze-log sample.log`.
 
 ## Optional cloud mode
 
-Cloud mode is opt-in. It sends the text after \`/cloud\` to the provider and may incur charges. Do not send secrets, credentials, private logs, or personal data.
+Cloud mode is opt-in. It sends the text after `/cloud` to the provider and may incur charges. Do not send secrets, credentials, private logs, or personal data.
 
 Set the API key only in the current PowerShell session:
 
-\`\`\`powershell
+```powershell
 $env:OPENAI_API_KEY = "YOUR_API_KEY"
 $env:OPENAI_MODEL = "gpt-4.1-mini"
-.\\run.ps1
-\`\`\`
+.\run.ps1
+```
 
-Then use \`/cloud your question\`. Do not paste API keys into chat, source files, SQLite memory, or audit logs. Close the PowerShell window to clear the session-scoped variable.
+Then use `/cloud your question`. Do not paste API keys into chat, source files, SQLite memory, or audit logs. Close the PowerShell window to clear the session-scoped variable.
 
 ## Development and tests
 
-\`\`\`powershell
-.\\.venv\\Scripts\\python.exe -m pytest -q
-\`\`\`
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
 GitHub Actions also runs the tests for pushes and pull requests.
 
