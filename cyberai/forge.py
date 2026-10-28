@@ -21,7 +21,7 @@ _ALLOWED_SUFFIXES = {".py", ".md", ".json", ".txt"}
 _ALLOWED_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _FORBIDDEN_NAMES = {
     "setup.py", "sitecustomize.py", "usercustomize.py",
-    "__init__.py", "conftest.py",
+    "__init__.py", "manifest.json", "conftest.py",
 }
 
 
