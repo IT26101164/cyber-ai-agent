@@ -686,7 +686,7 @@ class JarvisPlus:
             self._label(self.alert_rows_frame,"No heuristic review hints in this snapshot.",GREEN,7).pack(anchor="w",pady=3)
             self._label(self.alert_rows_frame,"Normal connections are not alerts by themselves.",MUTED,6).pack(anchor="w")
             return
-        for item in self.current_alerts[:5]:
+        for item in self.current_alerts[:3]:
             color=RED if item["level"]=="HIGH REVIEW" else AMBER if item["level"]=="REVIEW" else TEAL
             row=tk.Frame(self.alert_rows_frame,bg=PANEL)
             row.pack(fill="x",pady=3)
