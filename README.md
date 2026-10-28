@@ -10,6 +10,7 @@ A Windows-friendly, local-first cybersecurity research and defense assistant des
 - Incident-response checklists for social account compromise, email compromise, suspicious Windows activity, and phishing
 - Safe synthetic red/blue-team simulations with detection indicators and defensive recommendations
 - Read-only Windows Security Health Check for Defender, Firewall profiles, and Windows Update service status
+- Local-first Mastermind planning with saved plans, explicit human review, and audit events
 - HTTPS research fetching from a small allowlist of documentation hosts
 - JSONL audit events
 - Optional cloud chat via `/cloud` (never automatic)
@@ -35,6 +36,10 @@ The planning agent is advisory only: it stores plans, but it does not execute mo
 | `/incident TYPE` | Show a defensive incident-response checklist |
 | `/simulate SCENARIO` | Run a synthetic red/blue exercise; no real attack is executed |
 | `/healthcheck` | Read-only Windows Defender, Firewall, and Update service status |
+| `/plan GOAL` | Create a defensive plan for human review; no actions run |
+| `/plans` | List saved plans and review status |
+| `/approve PLAN_ID` | Mark a plan approved for manual follow-through only |
+| `/reject PLAN_ID` | Reject a pending plan |
 | `/research HTTPS_URL` | Fetch a page from an allowlisted HTTPS documentation host |
 | `/cloud TEXT` | Explicitly send a prompt to the configured cloud model |
 | `/help` | Show commands |
@@ -55,6 +60,21 @@ Simulation examples:
 - `/simulate ransomware-warning`
 
 Simulations generate fictional events, indicators, and defense recommendations only. They do not run commands, access accounts, modify files, or touch networks. Incident checklists are guidance, not automatic account recovery. For social platforms, use their official recovery flow; never share one-time codes or pay strangers claiming they can recover an account.
+
+### Mastermind planning and human approval
+
+The planning agent uses the configured local Ollama model by default. It turns a goal into a short, structured plan with assumptions, risk notes, validation criteria, and approval flags.
+
+Example workflow:
+
+1. Run `/plan Review the security posture of my own Windows laptop`.
+2. Read the plan and its ID; new plans start as `pending_approval`.
+3. Run `/plans` to review saved plan summaries.
+4. Use `/approve PLAN_ID` or `/reject PLAN_ID` to record your decision.
+
+Plans are stored locally in `data/plans.json`; plan creation and review decisions are recorded in `logs/audit.jsonl`. Protect these files because goals may contain sensitive context.
+
+**Important control boundary:** approving a plan only marks it as reviewed for you to carry out manually. CyberAI does not execute plan steps, run model-generated shell commands, scan targets, or change settings. Keep work limited to your own laptop and explicitly authorized lab systems. This approval record is not a substitute for confirming scope before each active test.
 
 ### Windows Security Health Check
 
