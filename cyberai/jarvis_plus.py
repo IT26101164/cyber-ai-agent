@@ -307,8 +307,10 @@ class JarvisPlus:
         for value in ("TEAM: LOCAL ENDPOINT", "REGION: THIS DEVICE", "TIME: LAST 24 HOURS", "THREAT: REVIEW HINTS"):
             self._label(toolbar, value + "  ▾", WHITE, 7).pack(side="left", padx=(3, 7), pady=2)
         self._label(toolbar, "⌕  Search incidents / process…", DIM, 7).pack(side="left", padx=(10, 5))
-        self.voice_chip = self._label(toolbar, "● READY", GREEN, 7, True)
-        self.voice_chip.pack(side="right", padx=4)
+        self.voice_chip = self._label(toolbar, "● VOICE OPTIONAL", MUTED, 7, True)
+        self.voice_chip.pack(side="right", padx=(6, 3))
+        self.status_label = self._label(toolbar, "● INITIALIZING", GREEN, 7, True)
+        self.status_label.pack(side="right", padx=5)
 
         # Page heading
         heading = tk.Frame(main, bg=BG)
@@ -375,9 +377,12 @@ class JarvisPlus:
         legend.pack(fill="x", pady=(0, 3))
         self._label(legend, "● REVIEW", RED, 6, True).pack(side="right", padx=(6, 0))
         self._label(legend, "● NORMAL", GREEN, 6, True).pack(side="right")
-        self.topology_canvas = tk.Canvas(topology_body, bg=PANEL, height=150, highlightthickness=0)
-        self.topology_canvas.pack(fill="both", expand=True)
+        self.topology_canvas = tk.Canvas(topology_body, bg=PANEL, height=105, highlightthickness=0)
+        self.topology_canvas.pack(fill="x", expand=False)
         self.topology_canvas.bind("<Configure>", lambda _e: self._draw_topology())
+        self._label(topology_body, "RECENT REVIEW HINTS", AMBER, 7, True).pack(anchor="w", pady=(3, 2))
+        self.alert_rows_frame = tk.Frame(topology_body, bg=PANEL)
+        self.alert_rows_frame.pack(fill="both", expand=True)
 
         panel, lifecycle = self._panel(upper, "INCIDENT LIFECYCLE", "SAMPLE CASE • INC-2847")
         panel.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
@@ -438,23 +443,48 @@ class JarvisPlus:
             card, _val = self._metric_card(incident_metrics, label, value, "DEMO INCIDENT DATA", color)
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 3, 0))
 
-        panel, threat = self._panel(center, "GLOBAL THREAT READER", "Demonstration incident register • no external threat feed configured")
+        panel, threat = self._panel(center, "GLOBAL THREAT READER", "Demo incident register + live local TCP table • switch views")
         panel.grid(row=1, column=0, sticky="nsew")
-        threat.grid_rowconfigure(0, weight=1)
-        threat.grid_columnconfigure(0, weight=1)
+        switchbar = tk.Frame(threat, bg=PANEL)
+        switchbar.pack(fill="x", pady=(0, 4))
+        self._button(switchbar, "DEMO INCIDENTS", lambda: self._show_data_view("incidents"), TEAL).pack(side="left", padx=(0, 4))
+        self._button(switchbar, "LIVE TCP CONNECTIONS", lambda: self._show_data_view("connections"), GREEN).pack(side="left")
+        self.view_stack = tk.Frame(threat, bg=PANEL)
+        self.view_stack.pack(fill="both", expand=True)
+        self.incidents_view = tk.Frame(self.view_stack, bg=PANEL)
+        self.connections_view = tk.Frame(self.view_stack, bg=PANEL)
+        for view in (self.incidents_view, self.connections_view):
+            view.place(relx=0, rely=0, relwidth=1, relheight=1)
         cols = ("owner", "id", "type", "severity", "time")
-        self.incident_table = ttk.Treeview(threat, columns=cols, show="headings", height=5, style="SOC.Treeview")
+        self.incident_table = ttk.Treeview(self.incidents_view, columns=cols, show="headings", height=5, style="SOC.Treeview")
         headings = [("owner", "ASSIGNED TO", 90), ("id", "INCIDENT ID", 80), ("type", "TYPE", 130), ("severity", "SEVERITY", 70), ("time", "TIME", 65)]
         for col, label, width in headings:
             self.incident_table.heading(col, text=label)
             self.incident_table.column(col, width=width, minwidth=45, anchor="w", stretch=True)
-        self.incident_table.grid(row=0, column=0, sticky="nsew", pady=(3, 0))
+        incident_scroll = ttk.Scrollbar(self.incidents_view, orient="vertical", command=self.incident_table.yview)
+        self.incident_table.configure(yscrollcommand=incident_scroll.set)
+        self.incident_table.pack(side="left", fill="both", expand=True, pady=(3, 0))
+        incident_scroll.pack(side="right", fill="y", pady=(3, 0))
         for item in DEMO_INCIDENTS:
             self.incident_table.insert("", "end", values=item, tags=(item[2],))
         self.incident_table.tag_configure("CRITICAL", foreground=RED)
         self.incident_table.tag_configure("HIGH", foreground=AMBER)
         self.incident_table.tag_configure("REVIEW", foreground=TEAL)
         self.incident_table.tag_configure("MEDIUM", foreground=VIOLET)
+        live_cols = ("local", "remote", "state", "pid", "process")
+        self.connection_table = ttk.Treeview(self.connections_view, columns=live_cols, show="headings", height=5, style="SOC.Treeview")
+        for col, label, width in [
+            ("local", "LOCAL ENDPOINT", 125), ("remote", "REMOTE ENDPOINT", 125),
+            ("state", "STATE", 75), ("pid", "PID", 50), ("process", "PROCESS", 85),
+        ]:
+            self.connection_table.heading(col, text=label)
+            self.connection_table.column(col, width=width, minwidth=40, anchor="w", stretch=True)
+        live_scroll = ttk.Scrollbar(self.connections_view, orient="vertical", command=self.connection_table.yview)
+        self.connection_table.configure(yscrollcommand=live_scroll.set)
+        self.connection_table.pack(side="left", fill="both", expand=True, pady=(3, 0))
+        live_scroll.pack(side="right", fill="y", pady=(3, 0))
+        self.connection_table.bind("<<TreeviewSelect>>", self.show_connection)
+        self._show_data_view("incidents")
 
         panel, trend = self._panel(lower, "INCIDENT VOLUME TREND", "Sample counts • replace with incident telemetry")
         panel.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
@@ -475,8 +505,10 @@ class JarvisPlus:
 
     def _nav_action(self, name: str):
         if name in ("Overview", "Incidents"):
+            self._show_data_view("incidents")
             self.refresh()
         elif name in ("Network", "Assets"):
+            self._show_data_view("connections")
             self.focus_connections()
         elif name in ("Threats", "AI Insights"):
             self.focus_alerts()
@@ -484,6 +516,14 @@ class JarvisPlus:
             self.speak_status()
         else:
             messagebox.showinfo("JARVIS", "This screen is a read-only local monitoring preview. No external threat feed is configured.")
+
+    def _show_data_view(self, name: str):
+        if name == "connections":
+            self.connections_view.tkraise()
+            self.status_label.configure(text="● LOCAL TCP VIEW", fg=GREEN)
+        else:
+            self.incidents_view.tkraise()
+            self.status_label.configure(text="● INCIDENTS: DEMO DATA", fg=AMBER)
 
     def _draw_health(self):
         c = self.health_canvas
@@ -788,46 +828,8 @@ class JarvisPlus:
 def main():
     if tk is None or ttk is None:
         raise RuntimeError("Tkinter is unavailable. Install Python with Tcl/Tk support.")
-    root=tk.Tk()
-    app=JarvisPlus(root)
-
-    # Layout panel placeholders for real connection data / selection.
-    # A dedicated compact connection table is placed in a floating inspector to keep
-    # the incident screen similar to the reference while preserving direct inspection.
-    inspector=tk.Toplevel(root)
-    inspector.title("JARVIS | Local Connection Inspector")
-    inspector.geometry("750x360+120+140")
-    inspector.configure(bg=BG)
-    inspector.withdraw()
-    # Embed the live table as a non-modal inspector that can be opened from Network nav.
-    # Root always retains incident-management overview. Users can bring inspector forward.
-    connection_panel=tk.Frame(inspector,bg=PANEL,padx=10,pady=10)
-    connection_panel.pack(fill="both",expand=True)
-    app.connection_table=ttk.Treeview(
-        connection_panel,columns=("local","remote","state","pid","process"),
-        show="headings",style="SOC.Treeview",
-    )
-    for col,title,width in [
-        ("local","LOCAL ENDPOINT",155),("remote","REMOTE ENDPOINT",155),
-        ("state","STATE",95),("pid","PID",65),("process","PROCESS",130)
-    ]:
-        app.connection_table.heading(col,text=title)
-        app.connection_table.column(col,width=width,anchor="w")
-    app.connection_table.pack(fill="both",expand=True)
-    app.connection_table.bind("<<TreeviewSelect>>",app.show_connection)
-    original_nav=app._nav_action
-    def nav_with_inspector(name:str):
-        if name=="Network":
-            inspector.deiconify()
-            inspector.lift()
-            app.focus_connections()
-        elif name=="Assets":
-            app._set_insight("Process details are shown from local process metadata in the connection inspector.")
-        else:
-            original_nav(name)
-    app._nav_action=nav_with_inspector
-    app.connection_table.update_idletasks()
-    app.refresh()
+    root = tk.Tk()
+    JarvisPlus(root)
     root.mainloop()
 
 
