@@ -11,6 +11,7 @@ A Windows-friendly, local-first cybersecurity research and defense assistant des
 - Safe synthetic red/blue-team simulations with detection indicators and defensive recommendations
 - Read-only Windows Security Health Check for Defender, Firewall profiles, and Windows Update service status
 - Local-first Mastermind planning with saved plans, explicit human review, and audit events
+- Capability Forge for approval-gated drafting of new text/code files into an isolated staging folder
 - HTTPS research fetching from a small allowlist of documentation hosts
 - JSONL audit events
 - Optional cloud chat via `/cloud` (never automatic)
@@ -40,6 +41,10 @@ The planning agent is advisory only: it stores plans, but it does not execute mo
 | `/plans` | List saved plans and review status |
 | `/approve PLAN_ID` | Mark a plan approved for manual follow-through only |
 | `/reject PLAN_ID` | Reject a pending plan |
+| `/forge GOAL` | Propose a new capability draft; writes no files until approved |
+| `/forge-list` | List capability proposals and status |
+| `/forge-approve ID` | Write approved draft files into `generated_capabilities/` staging |
+| `/forge-reject ID` | Reject a capability proposal |
 | `/research HTTPS_URL` | Fetch a page from an allowlisted HTTPS documentation host |
 | `/cloud TEXT` | Explicitly send a prompt to the configured cloud model |
 | `/help` | Show commands |
@@ -75,6 +80,17 @@ Example workflow:
 Plans are stored locally in `data/plans.json`; plan creation and review decisions are recorded in `logs/audit.jsonl`. Protect these files because goals may contain sensitive context.
 
 **Important control boundary:** approving a plan only marks it as reviewed for you to carry out manually. CyberAI does not execute plan steps, run model-generated shell commands, scan targets, or change settings. Keep work limited to your own laptop and explicitly authorized lab systems. This approval record is not a substitute for confirming scope before each active test.
+
+### Capability Forge: approval-gated self-building
+
+Use `/forge GOAL` to ask the local model to design a small capability. CyberAI stores a proposal and displays its draft files for review; it does not write the proposed files yet.
+
+1. Run `/forge Create a local security report formatter`.
+2. Inspect the proposed filenames, code, and review notes.
+3. Run `/forge-approve ID` to write the approved draft under `generated_capabilities/ID/`, or `/forge-reject ID` to reject it.
+4. Run `/forge-list` to see proposal status and staging paths.
+
+The Forge permits at most three flat text files per proposal, with bounded file sizes and a small allowlist of extensions. It does not overwrite existing files or change existing application source. Generated Python is **never automatically imported, executed, installed, or tested**. The staging folder is not an active plugin directory. Review the code manually before using it; integration into CyberAI requires a separate change and review. This is a controlled first step toward self-building, not unrestricted self-modification or a guarantee that any requested feature can be built.
 
 ### Windows Security Health Check
 
