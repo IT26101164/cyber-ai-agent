@@ -322,10 +322,13 @@ class JarvisPlus:
         self._label(title_area, "Monitor, investigate, prioritize and resolve security events on this device.", MUTED, 8).pack(anchor="w", pady=(2, 0))
         actions = tk.Frame(heading, bg=BG)
         actions.pack(side="right", anchor="center")
-        self._button(actions, "↻  REFRESH", self.refresh).pack(side="left", padx=3)
+        self._button(actions, "FLOW LAB", self.simulate, GREEN).pack(side="left", padx=2)
+        self._button(actions, "SPEAK", self.speak_status).pack(side="left", padx=2)
+        self._button(actions, "VOICE", self.listen_once, AMBER).pack(side="left", padx=2)
+        self._button(actions, "↻  REFRESH", self.refresh).pack(side="left", padx=2)
         self.pause_button = self._button(actions, "PAUSE", self.toggle_poll, AMBER)
-        self.pause_button.pack(side="left", padx=3)
-        self._button(actions, "FULLSCREEN  F11", self.toggle_fullscreen).pack(side="left", padx=3)
+        self.pause_button.pack(side="left", padx=2)
+        self._button(actions, "FULLSCREEN", self.toggle_fullscreen).pack(side="left", padx=2)
 
         # Four compact live telemetry cards.
         cards = tk.Frame(main, bg=BG)
@@ -739,12 +742,21 @@ class JarvisPlus:
                 f"Local: {values[0]}\nRemote: {values[1]}\nState: {values[2]}\nPID: {values[3]}\nProcess: {values[4]}\n\nMetadata only; payload is not captured.")
 
     def simulate(self):
-        if not hasattr(self,"simulation_list"):
-            return
-        self.simulation_list.delete(0,tk.END)
+        """Show a fictional message-flow timeline; no network request is made."""
+        window = tk.Toplevel(self.root)
+        window.title("JARVIS | Synthetic Flow Lab")
+        window.geometry("620x245")
+        window.configure(bg=BG)
+        self._label(window, "SYNTHETIC MESSAGE FLOW", TEAL, 12, True).pack(anchor="w", padx=16, pady=(14, 3))
+        self._label(window, "Educational illustration only • no WhatsApp connection • no packets transmitted", MUTED, 8).pack(anchor="w", padx=16, pady=(0, 10))
+        timeline = tk.Frame(window, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground=EDGE)
+        timeline.pack(fill="both", expand=True, padx=16, pady=(0, 14))
         for hop in simulated_hops():
-            self.simulation_list.insert(tk.END,
-                f"{hop['time']}  {hop['packet']}  {hop['source']} -> {hop['destination']} [{hop['state']}]")
+            row = tk.Frame(timeline, bg=PANEL)
+            row.pack(fill="x", pady=4)
+            self._label(row, hop["packet"], AMBER, 8, True, width=9).pack(side="left")
+            self._label(row, f"{hop['source']}  →  {hop['destination']}", WHITE, 8).pack(side="left", fill="x", expand=True, padx=6)
+            self._label(row, hop["state"], GREEN, 7, True).pack(side="right")
 
     def toggle_poll(self):
         self.auto_refresh=not self.auto_refresh
