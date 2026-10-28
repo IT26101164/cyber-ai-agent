@@ -444,6 +444,10 @@ class CaseStore:
         """Verify the local hash chain. It is tamper-evident, not a signed external guarantee."""
         with closing(self._connect()) as con:
             rows = con.execute("SELECT * FROM audit_events ORDER BY seq").fetchall()
+            notes = {
+                row["note_id"]: dict(row)
+                for row in con.execute("SELECT note_id,note_sha256,note FROM notes").fetchall()
+            }
         previous = ZERO_HASH
         checked = 0
         for row in rows:
@@ -461,7 +465,7 @@ class CaseStore:
                 return {"ok": False, "checked": checked, "failed_seq": item["seq"], "reason": "Hash chain mismatch"}
             if item["event"] == "NOTE_ADDED":
                 note_id = details.get("note_id")
-                note = con.execute("SELECT note_sha256,note FROM notes WHERE note_id=?", (note_id,)).fetchone()
+                note = notes.get(note_id)
                 if not note or not note["note_sha256"]:
                     return {"ok": False, "checked": checked, "failed_seq": item["seq"], "reason": "Investigator note missing or lacks integrity metadata"}
                 live_note_hash = hashlib.sha256(note["note"].encode("utf-8")).hexdigest()
