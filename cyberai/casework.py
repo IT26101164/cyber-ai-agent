@@ -928,10 +928,12 @@ class CaseStore:
                 )
             })
         report = {
-            "report_schema": "cyberai.case-report.v2",
+            "report_schema": "cyberai.case-report.v3",
             "exported_at_utc": utc_now(),
             "case": case,
             "evidence": evidence,
+            "phone_leads": self.list_phone_leads(case_id),
+            "authorized_location_records": self.list_location_records(case_id),
             "indicators": self.list_indicators(case_id),
             "repeated_indicator_leads": self.correlations(case_id),
             "evidence_timeline": {
@@ -949,6 +951,9 @@ class CaseStore:
                 "SHA-256 confirms the exported/stored copy matches the recorded digest, not source authenticity or legal admissibility.",
                 "The report contains case metadata and analysis output, not the original evidence file contents.",
                 "Evidence timeline timestamps are parsed from imported text only; missing timezone offsets remain unknown and can affect ordering.",
+                "Phone leads and location records are manually entered from local case data; no phone-number lookup, device access, telecom query or live tracking is performed.",
+                "Location records require an explicit authorization/consent basis, reference, and same-case imported evidence whose SHA-256 matches.",
+                "Case reports may contain phone numbers and precise location coordinates; handle exports as restricted personal and investigative data.",
             ],
             "limitations": [
                 "This report reflects only locally imported evidence and recorded notes at export time.",
@@ -1049,6 +1054,7 @@ class CaseworkWindow:
             ("CORRELATIONS", self.show_correlations, TEAL),
             ("TIMELINE", self.show_timeline, WHITE),
             ("EVIDENCE TIMELINE", self.show_evidence_timeline, CYAN),
+            ("PHONE INTELLIGENCE", self.open_phone_intelligence, VIOLET),
             ("EXPORT CASE REPORT", self.export_case_report, GREEN),
             ("EXPORT AUDIT", self.export_audit, VIOLET),
         ]
@@ -1197,7 +1203,8 @@ class CaseworkWindow:
             f"EVIDENCE ITEMS: {summary['evidence_count']}\n"
             f"EXTRACTED INDICATORS: {summary['indicator_count']}\n"
             f"REPEATED INDICATORS ACROSS FILES: {summary['correlation_count']}\n"
-            f"INVESTIGATOR NOTES: {summary['note_count']}\n"
+            f"INVESTIGATOR NOTES: {summary['note_count']}\n"            f"PHONE-NUMBER LEADS: {summary['phone_lead_count']}\n"
+            f"AUTHORIZED LOCATION RECORDS: {summary['location_record_count']}\n"
             + ("\n".join(f"• {note['created_at']} — {note['author']}: {note['note']}" for note in self.store.list_notes(case_id)[:8]) or "No notes recorded.") + "\n\n"
             "INTERPRETATION GUARDRAILS\n"
             "• Shared indicators are leads; shared IPs/domains do not prove a person is responsible.\n"
@@ -1406,6 +1413,23 @@ class CaseworkWindow:
             )
         except Exception as exc:
             messagebox.showerror("Evidence timeline failed", str(exc), parent=self.window)
+
+    def open_phone_intelligence(self):
+        case_id = self._require_case()
+        if not case_id:
+            return
+        try:
+            existing = getattr(self, "phone_intelligence_window", None)
+            if existing is not None and existing.window.winfo_exists():
+                existing.window.lift()
+                existing.load_case(case_id)
+                return
+        except Exception:
+            pass
+        try:
+            self.phone_intelligence_window = PhoneIntelligenceWindow(self.window, self.store, case_id)
+        except Exception as exc:
+            messagebox.showerror("Phone Intelligence", str(exc), parent=self.window)
 
     def export_case_report(self):
         case_id = self._require_case()
