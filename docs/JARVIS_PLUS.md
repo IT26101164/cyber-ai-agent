@@ -16,7 +16,8 @@ The original `cyberai.jarvis_app` remains available and unchanged. JARVIS Plus n
 - Live TCP connection table and demonstration incident table share the centre panel; use the two view buttons to switch between them.
 - Recent review hints with process/PID and endpoint details.
 - Explainable local analyst note and a sample incident volume trend.
-- Optional local text-to-speech and one-shot voice commands, with buttons and keyboard alternatives.
+- Visible Flow Lab popup for a synthetic three-hop message route; it performs no network I/O.
+- Optional local text-to-speech and one-shot voice commands through the Speak and Voice buttons, with manual refresh and keyboard alternatives.
 
 ## Optional voice
 
