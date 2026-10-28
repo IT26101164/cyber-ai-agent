@@ -553,7 +553,8 @@ class CaseworkWindow:
         self.notebook.grid(row=1, column=0, sticky="nsew")
         self.overview_tab = self._tab("OVERVIEW")
         self.evidence_tab = self._tab("EVIDENCE")
-        self.indicators_tab = self._tab("CORRELATIONS")
+        self.indicators_tab = self._tab("INDICATORS")
+        self.correlations_tab = self._tab("CORRELATIONS")
         self.timeline_tab = self._tab("TIMELINE & AUDIT")
         self.overview_text = self._text(self.overview_tab)
         self.evidence_tree = self._tree(self.evidence_tab, ("id", "name", "size", "hash", "source"))
@@ -563,10 +564,15 @@ class CaseworkWindow:
         ]:
             self.evidence_tree.heading(key, text=label)
             self.evidence_tree.column(key, width=width, minwidth=60, anchor="w", stretch=True)
-        self.indicator_tree = self._tree(self.indicators_tab, ("type", "value", "count", "files"))
-        for key, label, width in [("type", "TYPE", 100), ("value", "INDICATOR", 270), ("count", "FILES", 65), ("files", "MATCHED EVIDENCE", 240)]:
+        self.evidence_tree.bind("<Double-1>", self._show_evidence_details)
+        self.indicator_tree = self._tree(self.indicators_tab, ("type", "value", "evidence", "file"))
+        for key, label, width in [("type", "TYPE", 100), ("value", "INDICATOR", 320), ("evidence", "EVIDENCE ID", 130), ("file", "SOURCE FILE", 230)]:
             self.indicator_tree.heading(key, text=label)
             self.indicator_tree.column(key, width=width, minwidth=70, anchor="w", stretch=True)
+        self.correlation_tree = self._tree(self.correlations_tab, ("type", "value", "count", "files"))
+        for key, label, width in [("type", "TYPE", 100), ("value", "REPEATED INDICATOR", 270), ("count", "FILES", 65), ("files", "MATCHED EVIDENCE", 240)]:
+            self.correlation_tree.heading(key, text=label)
+            self.correlation_tree.column(key, width=width, minwidth=70, anchor="w", stretch=True)
         self.timeline_tree = self._tree(self.timeline_tab, ("time", "event", "actor", "details"))
         for key, label, width in [("time", "UTC TIME", 170), ("event", "EVENT", 165), ("actor", "ACTOR", 100), ("details", "DETAILS", 320)]:
             self.timeline_tree.heading(key, text=label)
@@ -629,6 +635,7 @@ class CaseworkWindow:
             self._set_text(self.overview_text, "No case selected.\n\nWorkflow:\n1. Create a case.\n2. Import a lawfully obtained local evidence file.\n3. Record its provenance and verify the stored SHA-256.\n4. Review repeated indicators and the audit timeline.\n\nThis tool produces investigative leads, not suspect attribution or legal conclusions.")
             self._clear_tree(self.evidence_tree)
             self._clear_tree(self.indicator_tree)
+            self._clear_tree(self.correlation_tree)
             self._clear_tree(self.timeline_tree)
 
     def _clear_tree(self, tree: Any):
@@ -670,8 +677,13 @@ class CaseworkWindow:
                 ev["sha256"][:16] + "…", ev["source_label"],
             ))
         self._clear_tree(self.indicator_tree)
-        for lead in self.store.correlations(case_id):
+        for item in self.store.list_indicators(case_id):
             self.indicator_tree.insert("", "end", values=(
+                item["indicator_type"], item["value"], item["evidence_id"], item["original_name"],
+            ))
+        self._clear_tree(self.correlation_tree)
+        for lead in self.store.correlations(case_id):
+            self.correlation_tree.insert("", "end", values=(
                 lead["indicator_type"], lead["value"], lead["evidence_count"],
                 ", ".join(lead["filenames"])[:240],
             ))
@@ -760,6 +772,29 @@ class CaseworkWindow:
         self.refresh_cases(case["case_id"])
         self.status_bar.configure(text=f"{case_id} status set to {case['status']}.")
 
+    def _show_evidence_details(self, _event=None):
+        selection = self.evidence_tree.selection()
+        if not selection:
+            return
+        try:
+            item = self.store.get_evidence(selection[0])
+        except Exception as exc:
+            messagebox.showerror("Evidence details", str(exc), parent=self.window)
+            return
+        messagebox.showinfo(
+            "Evidence metadata",
+            f"Evidence ID: {item['evidence_id']}\n"
+            f"Filename: {item['original_name']}\n"
+            f"SHA-256: {item['sha256']}\n"
+            f"Size: {item['size_bytes']:,} bytes\n"
+            f"Media type: {item['media_type']}\n"
+            f"Collected (UTC): {item['collected_at']}\n"
+            f"Provenance: {item['source_label']}\n"
+            f"Description: {item['description'] or '(none)'}\n"
+            f"Vault path: {item['absolute_path']}",
+            parent=self.window,
+        )
+
     def verify_hashes(self):
         case_id = self._require_case()
         if not case_id:
@@ -777,7 +812,7 @@ class CaseworkWindow:
         if not case_id:
             return
         self._load_case()
-        self.notebook.select(self.indicators_tab)
+        self.notebook.select(self.correlations_tab)
         leads = self.store.correlations(case_id)
         if leads:
             self.status_bar.configure(text=f"{len(leads)} repeated indicator lead(s) across separate evidence files. Review context before drawing conclusions.")
