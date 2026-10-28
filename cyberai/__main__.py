@@ -4,6 +4,7 @@ from pathlib import Path
 from cyberai.audit import AuditLog
 from cyberai.agent import PlanStore
 from cyberai.defense import analyze_log
+from cyberai.forge import CapabilityForge
 from cyberai.llm import ModelError, ask_cloud, ask_local
 from cyberai.memory import MemoryStore
 from cyberai.posture import collect_windows_posture
@@ -14,6 +15,7 @@ from cyberai.simulator import simulate
 ROOT = Path(__file__).resolve().parent.parent
 MEMORY = MemoryStore(ROOT / "data" / "memory.db")
 PLANS = PlanStore(ROOT / "data" / "plans.json")
+FORGE = CapabilityForge(ROOT / "data" / "forge.json", ROOT / "generated_capabilities")
 AUDIT = AuditLog(ROOT / "logs" / "audit.jsonl")
 LOG_DIR = ROOT / "logs"
 
@@ -30,6 +32,10 @@ def help_text() -> str:
   /plans              List saved plans and their review status
   /approve PLAN_ID    Approve a plan for manual follow-through only
   /reject PLAN_ID     Reject a pending plan
+  /forge GOAL         Design a new capability draft for approval
+  /forge-list         List capability proposals and build status
+  /forge-approve ID   Build approved draft files in generated_capabilities/
+  /forge-reject ID    Reject a capability proposal
   /research HTTPS_URL Fetch a page from an allowlisted HTTPS documentation host
   /cloud TEXT         Send a prompt to the configured cloud model
   /help               Show commands
@@ -110,6 +116,31 @@ def main() -> None:
                 AUDIT.write("plan_reviewed", plan_id=result["id"], decision=decision, status=result["status"])
                 print(json.dumps(result, indent=2, ensure_ascii=False))
                 print("Approval never runs commands. Carry out steps manually and only within your authorized scope.")
+            elif line.startswith("/forge "):
+                goal = line[len("/forge "):].strip()
+                result = FORGE.create(goal, ask_local)
+                AUDIT.write("capability_proposed", proposal_id=result["id"], status=result["status"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+                print("Review the proposed files before approval. Nothing has been written or executed.")
+            elif line == "/forge-list":
+                proposals = FORGE.list()
+                summary = [{
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "goal": item.get("goal"),
+                    "summary": item.get("summary"),
+                    "output_path": item.get("output_path"),
+                } for item in proposals]
+                print(json.dumps(summary, indent=2, ensure_ascii=False))
+                AUDIT.write("capability_proposals_listed", count=len(summary))
+            elif line.startswith("/forge-approve ") or line.startswith("/forge-reject "):
+                command, proposal_id = line[1:].split(" ", 1)
+                decision = "approve" if command == "forge-approve" else "reject"
+                result = FORGE.review(proposal_id, decision)
+                AUDIT.write("capability_reviewed", proposal_id=result["id"], decision=decision, status=result["status"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+                if decision == "approve":
+                    print("Draft files were written to staging only. They were NOT executed, imported, installed, or integrated.")
             elif line.startswith("/research "):
                 result = fetch_public_page(line[len("/research "):].strip())
                 MEMORY.remember(f"Source: {result['url']}\nContent: {result['text'][:7000]}", "research")
