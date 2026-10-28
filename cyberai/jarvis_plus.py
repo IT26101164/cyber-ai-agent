@@ -116,7 +116,7 @@ def assess_connections(
             score += 15
             reasons.append("Port sometimes appears in lab tooling; port number alone proves nothing")
         if score:
-            level = "HIGH REVIEW" if score >= 40 else "REVIEW" if score >= 20 else "INFO"
+            level = "HIGH REVIEW" if score >= 30 else "REVIEW" if score >= 20 else "INFO"
             alerts.append({
                 "level": level, "score": min(score, 100), "pid": pid,
                 "process": names.get(pid, "Unknown process"),
