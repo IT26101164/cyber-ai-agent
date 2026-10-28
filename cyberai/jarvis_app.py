@@ -10,10 +10,15 @@ import json
 import platform
 import random
 import subprocess
-import tkinter as tk
 from datetime import datetime
-from tkinter import ttk
 from typing import Any
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:  # Headless CI environments may not include Tcl/Tk.
+    tk = None  # type: ignore[assignment]
+    ttk = None  # type: ignore[assignment]
 
 BG = "#07111f"
 PANEL = "#0d1b2a"
