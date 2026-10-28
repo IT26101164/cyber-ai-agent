@@ -60,7 +60,7 @@ URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>\"']+")
 EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,63}\b")
 DOMAIN_RE = re.compile(r"(?i)(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?![\w.-])")
 SHA256_RE = re.compile(r"(?i)\b[a-f0-9]{64}\b")
-PHONE_RE = re.compile(r"(?<![\w+])\+(?:\d[\s().-]?){7,18}\d(?!\w)")
+PHONE_RE = re.compile(r"(?<![\w+])\+(?:\d[ \t().-]*){7,14}\d(?!\w)")
 
 PHONE_LEAD_STATUSES = (
     "UNVERIFIED", "COMPLAINANT", "WITNESS", "CONTACT", "SUBJECT_OF_INQUIRY",
@@ -953,7 +953,7 @@ class CaseStore:
                 "Evidence timeline timestamps are parsed from imported text only; missing timezone offsets remain unknown and can affect ordering.",
                 "Phone leads and location records are manually entered from local case data; no phone-number lookup, device access, telecom query or live tracking is performed.",
                 "Location records require an explicit authorization/consent basis, reference, and same-case imported evidence whose SHA-256 matches.",
-                "Case reports may contain phone numbers and precise location coordinates; handle exports as restricted personal and investigative data.",
+                "Case reports may contain sensitive personal and investigative data, including phone numbers and precise location coordinates; store/export only to approved restricted locations.",
             ],
             "limitations": [
                 "This report reflects only locally imported evidence and recorded notes at export time.",
