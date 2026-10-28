@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cyberai.casework import CaseStore, extract_indicators, extract_timestamps, sha256_file
+from cyberai.casework import (CaseStore, extract_indicators, extract_timestamps, normalize_phone_number, openstreetmap_url, sha256_file)
 
 
 class CaseStoreTests(unittest.TestCase):
@@ -119,6 +119,84 @@ class CaseStoreTests(unittest.TestCase):
         self.assertEqual(timeline["event_count"], 0)
         self.assertTrue(any("SHA-256 mismatch" in warning["reason"] for warning in timeline["warnings"]))
 
+    def test_phone_lead_normalization_and_duplicate_protection(self):
+        case = self._case()
+        lead = self.store.add_phone_lead(
+            case["case_id"], "+94 71-234-5678", "Complaint record",
+            legal_basis="LEAD_ONLY_NOT_LOCATION_AUTHORITY",
+        )
+        self.assertEqual(lead["phone_number"], "+94712345678")
+        self.assertEqual(lead["lead_status"], "UNVERIFIED")
+        self.assertEqual(normalize_phone_number("0094712345678"), "+94712345678")
+        with self.assertRaises(ValueError):
+            normalize_phone_number("0712345678")
+        with self.assertRaises(ValueError):
+            self.store.add_phone_lead(case["case_id"], "+94712345678", "Duplicate complaint")
+        self.assertTrue(self.store.audit_integrity()["ok"])
+
+    def test_phone_indicator_extraction_only_accepts_explicit_international_numbers(self):
+        values = set(extract_indicators("Call +94 71 234 5678 or +1 (202) 555-0147"))
+        self.assertIn(("phone", "+94712345678"), values)
+        self.assertIn(("phone", "+12025550147"), values)
+
+    def test_authorized_location_record_is_evidence_linked_and_normalized_to_utc(self):
+        case = self._case()
+        source = self._write("provider-response.json", '{"location":{"lat":6.9271,"lon":79.8612}}')
+        evidence = self.store.add_evidence(case["case_id"], source, "Authorized provider response, reference REQ-2026-123")
+        lead = self.store.add_phone_lead(
+            case["case_id"], "+94712345678", "Officer-entered case lead",
+            legal_basis="AUTHORIZED_PROVIDER_RESPONSE", authority_reference="REQ-2026-123",
+        )
+        location = self.store.add_location_record(
+            case["case_id"], lead["phone_id"], "2026-10-28T15:30:00+05:30",
+            "6.9271", "79.8612", "PROVIDER_RESPONSE",
+            "AUTHORIZED_PROVIDER_RESPONSE", "REQ-2026-123",
+            evidence["evidence_id"], "120", "Coordinate read from the imported response",
+        )
+        self.assertEqual(location["observed_at_utc"], "2026-10-28T10:00:00+00:00")
+        self.assertEqual(location["evidence_sha256"], evidence["sha256"])
+        self.assertEqual(location["phone_number"], "+94712345678")
+        self.assertIn("openstreetmap.org", openstreetmap_url(location["latitude"], location["longitude"]))
+        listed = self.store.list_location_records(case["case_id"])
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["evidence_filename"], "provider-response.json")
+        events = [item["event"] for item in self.store.timeline(case["case_id"])]
+        self.assertIn("AUTHORIZED_LOCATION_RECORD_ADDED", events)
+        self.assertTrue(self.store.audit_integrity()["ok"])
+
+    def test_location_record_requires_authority_reference_and_verified_evidence(self):
+        case = self._case()
+        source = self._write("provider-response.json", "authorized test record")
+        evidence = self.store.add_evidence(case["case_id"], source, "Authorized provider response")
+        lead = self.store.add_phone_lead(case["case_id"], "+94712345678", "Case intake")
+        with self.assertRaises(ValueError):
+            self.store.add_location_record(
+                case["case_id"], lead["phone_id"], "2026-10-28T15:30:00+05:30",
+                6.9, 79.8, "PROVIDER_RESPONSE", "AUTHORIZED_PROVIDER_RESPONSE", "",
+                evidence["evidence_id"],
+            )
+        Path(evidence["absolute_path"]).write_text("modified response", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.store.add_location_record(
+                case["case_id"], lead["phone_id"], "2026-10-28T15:30:00+05:30",
+                6.9, 79.8, "PROVIDER_RESPONSE", "AUTHORIZED_PROVIDER_RESPONSE", "REQ-2026-123",
+                evidence["evidence_id"],
+            )
+
+    def test_location_time_requires_explicit_timezone_and_coordinates_are_validated(self):
+        case = self._case()
+        source = self._write("provider-response.json", "authorized test record")
+        evidence = self.store.add_evidence(case["case_id"], source, "Authorized provider response")
+        lead = self.store.add_phone_lead(case["case_id"], "+94712345678", "Case intake")
+        with self.assertRaises(ValueError):
+            self.store.add_location_record(
+                case["case_id"], lead["phone_id"], "2026-10-28 15:30:00",
+                6.9, 79.8, "PROVIDER_RESPONSE", "AUTHORIZED_PROVIDER_RESPONSE", "REQ-2026-123",
+                evidence["evidence_id"],
+            )
+        with self.assertRaises(ValueError):
+            openstreetmap_url(190, 79.8)
+
     def test_indicator_extraction_validates_ipv4(self):
         values = set(extract_indicators("bad IP 999.999.999.999 and valid 192.0.2.7, user@example.invalid"))
         self.assertIn(("ipv4", "192.0.2.7"), values)
@@ -184,7 +262,7 @@ class CaseStoreTests(unittest.TestCase):
         self.assertEqual(report["evidence"][0]["sha256"], evidence["sha256"])
         self.assertTrue(any(item["indicator_type"] == "ipv4" for item in report["indicators"]))
         self.assertTrue(any(item["event"] == "NOTE_ADDED" for item in report["case_audit_timeline"]))
-        self.assertEqual(report["report_schema"], "cyberai.case-report.v2")
+        self.assertEqual(report["report_schema"], "cyberai.case-report.v3")
         self.assertEqual(report["evidence_timeline"]["event_count"], 1)
         self.assertTrue(self.store.audit_integrity()["ok"])
         events = [item["event"] for item in self.store.timeline(case["case_id"])]
