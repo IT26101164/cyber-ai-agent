@@ -11,6 +11,9 @@ The Casework window is opened from **JARVIS Plus → Casework**. It stores data 
 - Extract IP addresses, domains, URLs, email addresses and 64-character SHA-256 values from supported text/log formats (up to 5 MiB for text parsing).
 - Correlate the same indicator across separate evidence files and list the files where it appears.
 - Build a timestamp-aware evidence timeline from hash-verified local text evidence. Supported formats include ISO-8601, Apache access-log timestamps and RFC-2822 mail dates.
+- Open **Phone Intelligence** for a local phone-number lead register. Numbers are normalized only when already supplied in explicit international format; each lead has a classification, source/provenance, optional authority reference and notes. Classifications are investigative labels, not guilt findings.
+- Record a location observation only when it has an explicit ISO-8601 timestamp with timezone, valid coordinates, a non-empty authority/consent reference, a supported source/basis, and a same-case imported evidence file whose stored SHA-256 still matches.
+- Select a location record and explicitly confirm before opening its coordinates in external OpenStreetMap. The map service receives the coordinates and may process connection metadata.
 - Link timestamped log lines to the evidence ID, filename, line number, SHA-256 and any indicators found on the same line. Repeated indicators across different timestamped evidence files are presented as leads, not identity attribution.
 - Keep local audit history separate from evidence-derived events; the UI can show both in the timeline view.
 - Record investigator notes and exportable JSON Lines audit events.
@@ -38,7 +41,10 @@ Click the **Casework** icon in the JARVIS left rail to open the workbench.
 - Indicator matches are investigative leads, not identity attribution. Shared IP addresses/domains may be used by unrelated users; time, source, context and alternative explanations must be checked.
 - Timeline extraction scans only supported text formats and up to 5 MiB per file. Files whose stored SHA-256 does not match the recorded digest are skipped and reported as warnings.
 - Full dated timestamps are parsed; log fragments without a year are not guessed. Timestamps without an explicit timezone remain timezone-unknown and their placement relative to timezone-aware events is approximate. Device clock drift, parser limitations, and log manipulation can affect chronology.
-- No threat-intelligence, geo-location, telecom, financial, law-enforcement or social-platform API is connected. The app does not find a person's live location.
+- No threat-intelligence, geo-location, telecom, financial, law-enforcement or social-platform API is connected. The app does not find a person's live location or perform lookup by phone number.
+- The Phone Intelligence Desk stores numbers locally. Adding a number does not ping it, send a link, access a device, retrieve call/message data or locate the owner.
+- Location records are manually entered from a source file selected by the operator; they are not obtained from the number itself. Only use records obtained with valid consent or applicable legal authority, and follow agency policy and local law.
+- Case report schema v3 includes phone leads and location coordinates, which are sensitive personal/investigative data. Store/export them only to approved locations and restrict access. Opening a map sends the chosen coordinates to the external map service only after operator confirmation.
 - Database and evidence files are not encrypted by this module. Protect the Windows account and storage (for example, use device encryption/BitLocker where available), keep access restricted, and avoid storing unnecessary personal data.
 - The default operator label is \`local-operator\`; set the \`CYBERAI_OPERATOR\` environment variable before launching to choose a more useful audit label. It is a label, not authentication.
 
