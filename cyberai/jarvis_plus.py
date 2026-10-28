@@ -147,7 +147,7 @@ class JarvisPlus:
                         font=("Consolas", size, "bold" if bold else "normal"))
 
     def button(self, parent: Any, text: str, command: Any, color: str = CYAN):
-        return tk.Button(parent, text=text, command=command, text=text, bg=ALT, fg=color,
+        return tk.Button(parent, text=text, command=command, bg=ALT, fg=color,
                          activebackground="#17445b", activeforeground=TEXT, relief="flat",
                          bd=0, padx=12, pady=7, font=("Consolas", 9, "bold"), cursor="hand2")
 
