@@ -130,3 +130,16 @@ GitHub Actions also runs the tests for pushes and pull requests.
 - Review results; heuristic matches are not proof of compromise.
 
 Read [SECURITY.md](SECURITY.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design details and limitations.
+
+
+## JARVIS-style Windows desktop dashboard
+
+Launch the separate visual dashboard from the repository root:
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m cyberai.jarvis_app
+```
+
+It provides a dark desktop UI with a read-only Windows TCP connection-table view (local/remote endpoint, state, and PID) plus a separate simulated messaging packet-flow lab. The simulation is fictional and does not connect to WhatsApp or send messages. The live view displays connection metadata only; it is not a packet sniffer and does not reveal encrypted message contents. No Administrator privileges or extra Python packages are required for this first version.
+
+See [docs/JARVIS_DASHBOARD.md](docs/JARVIS_DASHBOARD.md) for launch instructions and limitations.
