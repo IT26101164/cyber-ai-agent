@@ -14,7 +14,7 @@ import os
 import re
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -220,14 +220,14 @@ class CaseStore:
         return self.get_case(case_id)
 
     def get_case(self, case_id: str) -> dict[str, Any]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             row = con.execute("SELECT * FROM cases WHERE case_id=?", (case_id,)).fetchone()
         if not row:
             raise KeyError(f"Unknown case: {case_id}")
         return dict(row)
 
     def list_cases(self) -> list[dict[str, Any]]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             rows = con.execute("SELECT * FROM cases ORDER BY updated_at DESC, case_id").fetchall()
         return [dict(row) for row in rows]
 
@@ -333,7 +333,7 @@ class CaseStore:
         return self.get_evidence(evidence_id)
 
     def get_evidence(self, evidence_id: str) -> dict[str, Any]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             row = con.execute("SELECT * FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()
         if not row:
             raise KeyError(f"Unknown evidence: {evidence_id}")
@@ -342,7 +342,7 @@ class CaseStore:
         return item
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             rows = con.execute(
                 "SELECT * FROM evidence WHERE case_id=? ORDER BY collected_at DESC, evidence_id",
                 (case_id,),
@@ -368,7 +368,7 @@ class CaseStore:
         return [self.verify_evidence(item["evidence_id"]) for item in self.list_evidence(case_id)]
 
     def list_indicators(self, case_id: str) -> list[dict[str, Any]]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             rows = con.execute(
                 "SELECT i.indicator_type, i.value, i.evidence_id, e.original_name "
                 "FROM indicators i JOIN evidence e ON e.evidence_id=i.evidence_id "
@@ -397,7 +397,7 @@ class CaseStore:
         return sorted(result, key=lambda x: (-x["evidence_count"], x["indicator_type"], x["value"]))
 
     def timeline(self, case_id: str, limit: int = 500) -> list[dict[str, Any]]:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             if not con.execute("SELECT 1 FROM cases WHERE case_id=?", (case_id,)).fetchone():
                 raise KeyError(f"Unknown case: {case_id}")
             rows = con.execute(
@@ -414,7 +414,7 @@ class CaseStore:
 
     def case_summary(self, case_id: str) -> dict[str, Any]:
         case = self.get_case(case_id)
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             evidence_count = con.execute("SELECT COUNT(*) FROM evidence WHERE case_id=?", (case_id,)).fetchone()[0]
             indicator_count = con.execute("SELECT COUNT(*) FROM indicators WHERE case_id=?", (case_id,)).fetchone()[0]
             note_count = con.execute("SELECT COUNT(*) FROM notes WHERE case_id=?", (case_id,)).fetchone()[0]
@@ -425,7 +425,7 @@ class CaseStore:
 
     def audit_integrity(self) -> dict[str, Any]:
         """Verify the local hash chain. It is tamper-evident, not a signed external guarantee."""
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             rows = con.execute("SELECT * FROM audit_events ORDER BY seq").fetchall()
         previous = ZERO_HASH
         checked = 0
@@ -448,7 +448,7 @@ class CaseStore:
 
     def export_audit(self, destination: str | Path) -> int:
         target = Path(destination).expanduser()
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             rows = con.execute("SELECT * FROM audit_events ORDER BY seq").fetchall()
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="\n") as stream:
