@@ -164,7 +164,8 @@ class CaseStore:
                     case_id TEXT NOT NULL REFERENCES cases(case_id),
                     created_at TEXT NOT NULL,
                     author TEXT NOT NULL,
-                    note TEXT NOT NULL
+                    note TEXT NOT NULL,
+                    note_sha256 TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS audit_events (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,6 +181,9 @@ class CaseStore:
                 CREATE INDEX IF NOT EXISTS idx_indicators_case_value ON indicators(case_id, indicator_type, value);
                 CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_events(case_id, seq);
             """)
+            note_columns = {row["name"] for row in con.execute("PRAGMA table_info(notes)").fetchall()}
+            if "note_sha256" not in note_columns:
+                con.execute("ALTER TABLE notes ADD COLUMN note_sha256 TEXT NOT NULL DEFAULT ''")
 
     def _event(
         self, con: sqlite3.Connection, event: str, case_id: str | None,
@@ -254,11 +258,24 @@ class CaseStore:
         with self._write() as con:
             if not con.execute("SELECT 1 FROM cases WHERE case_id=?", (case_id,)).fetchone():
                 raise KeyError(f"Unknown case: {case_id}")
-            con.execute("INSERT INTO notes(note_id,case_id,created_at,author,note) VALUES(?,?,?,?,?)",
-                        (note_id, case_id, now, who, note))
+            note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
+            con.execute("INSERT INTO notes(note_id,case_id,created_at,author,note,note_sha256) VALUES(?,?,?,?,?,?)",
+                        (note_id, case_id, now, who, note, note_hash))
             con.execute("UPDATE cases SET updated_at=? WHERE case_id=?", (now, case_id))
-            self._event(con, "NOTE_ADDED", case_id, {"note_id": note_id, "characters": len(note)}, who)
+            self._event(con, "NOTE_ADDED", case_id, {
+                "note_id": note_id, "characters": len(note), "note_sha256": note_hash,
+            }, who)
         return {"note_id": note_id, "case_id": case_id, "created_at": now, "author": who, "note": note}
+
+    def list_notes(self, case_id: str) -> list[dict[str, Any]]:
+        """Read stored investigator notes in reverse chronological order."""
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT note_id,case_id,created_at,author,note,note_sha256 FROM notes "
+                "WHERE case_id=? ORDER BY created_at DESC, note_id",
+                (case_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_evidence(
         self, case_id: str, source_path: str | Path, source_label: str,
@@ -442,6 +459,14 @@ class CaseStore:
             expected = hashlib.sha256((previous + _canonical_json(payload)).encode("utf-8")).hexdigest()
             if item["prev_hash"] != previous or item["event_hash"] != expected:
                 return {"ok": False, "checked": checked, "failed_seq": item["seq"], "reason": "Hash chain mismatch"}
+            if item["event"] == "NOTE_ADDED":
+                note_id = details.get("note_id")
+                note = con.execute("SELECT note_sha256,note FROM notes WHERE note_id=?", (note_id,)).fetchone()
+                if not note or not note["note_sha256"]:
+                    return {"ok": False, "checked": checked, "failed_seq": item["seq"], "reason": "Investigator note missing or lacks integrity metadata"}
+                live_note_hash = hashlib.sha256(note["note"].encode("utf-8")).hexdigest()
+                if note["note_sha256"] != live_note_hash or details.get("note_sha256") != live_note_hash:
+                    return {"ok": False, "checked": checked, "failed_seq": item["seq"], "reason": "Investigator note content mismatch"}
             previous = item["event_hash"]
             checked += 1
         return {"ok": True, "checked": checked, "last_hash": previous}
@@ -663,7 +688,8 @@ class CaseworkWindow:
             f"EVIDENCE ITEMS: {summary['evidence_count']}\n"
             f"EXTRACTED INDICATORS: {summary['indicator_count']}\n"
             f"REPEATED INDICATORS ACROSS FILES: {summary['correlation_count']}\n"
-            f"INVESTIGATOR NOTES: {summary['note_count']}\n\n"
+            f"INVESTIGATOR NOTES: {summary['note_count']}\n"
+            + ("\n".join(f"• {note['created_at']} — {note['author']}: {note['note']}" for note in self.store.list_notes(case_id)[:8]) or "No notes recorded.") + "\n\n"
             "INTERPRETATION GUARDRAILS\n"
             "• Shared indicators are leads; shared IPs/domains do not prove a person is responsible.\n"
             "• Hash matches verify a stored copy against its recorded digest, not the truth of the source.\n"
