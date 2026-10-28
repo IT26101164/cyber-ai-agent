@@ -15,7 +15,7 @@ A Windows-friendly, local-first cybersecurity research and defense assistant des
 - Optional cloud chat via `/cloud` (never automatic)
 - Unit tests and GitHub Actions CI
 
-This is a defensive research starter, not a fully autonomous penetration-testing or endpoint-protection system. It does not break into accounts, bypass authentication, execute arbitrary shell commands, scan networks, exploit systems, or change security settings. Simulations are synthetic and do not perform real attacks. The health check runs only fixed, read-only PowerShell queries. Test only systems you own or are authorized to assess.
+The planning agent is advisory only: it stores plans, but it does not execute model-generated commands or actions. Approval records a human review for manual follow-through; it is not an automation permission. This is a defensive research starter, not a fully autonomous penetration-testing or endpoint-protection system. It does not break into accounts, bypass authentication, execute arbitrary shell commands, scan networks, exploit systems, or change security settings. Simulations are synthetic and do not perform real attacks. The health check runs only fixed, read-only PowerShell queries. Test only systems you own or are authorized to assess.
 
 ## Quick setup (Windows PowerShell)
 
