@@ -68,5 +68,5 @@ def test_only_fixed_powershell_script_is_passed(monkeypatch):
     assert captured["args"][0] == "powershell.exe"
     assert captured["args"][-2] == "-Command"
     assert "Get-MpComputerStatus" in captured["args"][-1]
-    assert captured["kwargs"]["shell"] if "shell" in captured["kwargs"] else True
+    assert "shell" not in captured["kwargs"]
     assert captured["kwargs"]["timeout"] == 15
