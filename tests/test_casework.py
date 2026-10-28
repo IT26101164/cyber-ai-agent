@@ -134,6 +134,26 @@ class CaseStoreTests(unittest.TestCase):
             self.store.add_phone_lead(case["case_id"], "+94712345678", "Duplicate complaint")
         self.assertTrue(self.store.audit_integrity()["ok"])
 
+    def test_cross_case_phone_link_returns_matches_as_non_attribution_leads(self):
+        first_case = self._case()
+        first = self.store.add_phone_lead(
+            first_case["case_id"], "+94712345678", "First case complaint",
+            legal_basis="LEAD_ONLY_NOT_LOCATION_AUTHORITY",
+        )
+        second_case = self.store.create_case("Separate report", "Authorized sample case")
+        self.store.add_phone_lead(
+            second_case["case_id"], "0094712345678", "Second case intake",
+            legal_basis="LEAD_ONLY_NOT_LOCATION_AUTHORITY",
+        )
+        result = self.store.cross_case_phone_links(first["phone_id"])
+        self.assertEqual(result["match_count"], 2)
+        self.assertEqual(result["case_count"], 2)
+        self.assertEqual(result["other_case_count"], 1)
+        self.assertIn("not proof", result["interpretation"])
+        self.assertEqual({item["case_id"] for item in result["matches"]}, {
+            first_case["case_id"], second_case["case_id"],
+        })
+
     def test_phone_indicator_extraction_only_accepts_explicit_international_numbers(self):
         values = set(extract_indicators("Call +94 71 234 5678 or +1 (202) 555-0147"))
         self.assertIn(("phone", "+94712345678"), values)
