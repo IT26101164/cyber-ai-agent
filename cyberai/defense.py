@@ -5,7 +5,7 @@ from pathlib import Path
 
 PATTERNS = {
     "possible_script_download": re.compile(r"(?i)\b(?:curl|wget|Invoke-WebRequest)\b"),
-    "possible_encoded_command": re.compile(r"(?i)\b(?:-enc|-encodedcommand)\b"),
+    "possible_encoded_command": re.compile(r"(?i)-(?:enc|encodedcommand)\b"),
     "possible_sql_injection": re.compile(r"(?i)(?:union\s+select|or\s+1\s*=\s*1)"),
     "possible_path_traversal": re.compile(r"\.\.[/\\]"),
 }
