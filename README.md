@@ -154,3 +154,17 @@ Run the original dashboard with `python -m cyberai.jarvis_app`, or the enhanced 
 ```
 
 JARVIS Plus adds animated synthetic network flow, F11 fullscreen (Esc exits), process names for read-only TCP connection metadata, and explainable heuristic triage hints. Hints are not malware verdicts; verify the context. It never captures payloads or blocks/kills connections. Optional voice packages: `python -m pip install pyttsx3 SpeechRecognition pyaudio`. Voice recognition may send recognized audio to Google's service; avoid using it for sensitive speech. The dashboard works without voice extras.
+
+
+## Case & Evidence Workbench (JARVIS Plus)
+
+The JARVIS Plus desktop UI includes a **Casework** icon that opens the local investigation workbench. It supports case register/status, local evidence-file import into a vault copy, provenance labels, SHA-256 verification, text-file indicator extraction, cross-evidence correlations, investigator notes, UTC audit timeline, hash-chain verification and JSONL export.
+
+Run from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m cyberai.jarvis_plus
+```
+
+The evidence vault and database are stored under the ignored `data/casework/` directory. Evidence is not uploaded. Indicator matches are investigative leads and do not attribute a crime to a person. The audit is tamper-evident, not digitally signed; evidence is not encrypted by this module. Review [docs/CASEWORK.md](docs/CASEWORK.md) before using sensitive or real-world evidence.
