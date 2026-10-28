@@ -703,15 +703,175 @@ class CaseStore:
             "ordering_note": "Entries with no explicit timezone are placed by their recorded wall-clock value as a convenience; their order relative to timezone-aware events may be wrong.",
         }
 
+    def add_phone_lead(
+        self, case_id: str, phone_number: str, source_label: str,
+        lead_status: str = "UNVERIFIED",
+        legal_basis: str = "LEAD_ONLY_NOT_LOCATION_AUTHORITY",
+        authority_reference: str = "", notes: str = "",
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a phone-number lead; this performs no lookup, ping, or tracking."""
+        self.get_case(case_id)
+        normalized = normalize_phone_number(phone_number)
+        source = str(source_label or "").strip()
+        note = str(notes or "").strip()
+        if not 2 <= len(source) <= 300:
+            raise ValueError("Lead source must contain 2–300 characters.")
+        if lead_status not in PHONE_LEAD_STATUSES:
+            raise ValueError("Choose a supported lead classification; classifications do not imply guilt.")
+        reference = validate_authority_reference(legal_basis, authority_reference)
+        if len(note) > 2000:
+            raise ValueError("Notes must be 2,000 characters or fewer.")
+        phone_id = "PH-" + uuid.uuid4().hex[:12].upper()
+        created_at, who = utc_now(), (actor or self.actor)[:80]
+        with self._write() as con:
+            try:
+                con.execute(
+                    "INSERT INTO phone_leads(phone_id,case_id,phone_number,lead_status,source_label,legal_basis,authority_reference,notes,created_at,created_by) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (phone_id, case_id, normalized, lead_status, source, legal_basis, reference, note, created_at, who),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("This normalized phone number is already recorded in this case.") from exc
+            con.execute("UPDATE cases SET updated_at=? WHERE case_id=?", (created_at, case_id))
+            self._event(con, "PHONE_LEAD_ADDED", case_id, {
+                "phone_id": phone_id, "lead_status": lead_status, "source_label": source,
+                "legal_basis": legal_basis, "authority_reference": reference,
+                "phone_number_stored_locally": True,
+            }, who)
+        return self.get_phone_lead(phone_id)
+
+    def get_phone_lead(self, phone_id: str) -> dict[str, Any]:
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT * FROM phone_leads WHERE phone_id=?", (phone_id,)).fetchone()
+        if not row:
+            raise KeyError(f"Unknown phone lead: {phone_id}")
+        return dict(row)
+
+    def list_phone_leads(self, case_id: str) -> list[dict[str, Any]]:
+        self.get_case(case_id)
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT * FROM phone_leads WHERE case_id=? ORDER BY created_at, phone_id",
+                (case_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_location_record(
+        self, case_id: str, phone_id: str, observed_at: str,
+        latitude: float | str, longitude: float | str,
+        source_label: str, legal_basis: str, authority_reference: str,
+        evidence_id: str, accuracy_m: float | str | None = None,
+        notes: str = "", actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Record coordinates already present in authorized, imported evidence."""
+        self.get_case(case_id)
+        phone = self.get_phone_lead(phone_id)
+        if phone["case_id"] != case_id:
+            raise ValueError("Phone lead does not belong to the selected case.")
+        if source_label not in LOCATION_SOURCES:
+            raise ValueError("Choose a supported authorized location-record source.")
+        reference = validate_authority_reference(legal_basis, authority_reference, location=True)
+        observed_utc = parse_explicit_datetime(observed_at).isoformat(timespec="seconds")
+        try:
+            lat, lon = float(latitude), float(longitude)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Latitude and longitude must be numeric.") from exc
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError("Coordinates are outside valid latitude/longitude ranges.")
+        accuracy: float | None
+        if accuracy_m is None or str(accuracy_m).strip() == "":
+            accuracy = None
+        else:
+            try:
+                accuracy = float(accuracy_m)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Accuracy must be numeric in metres, or left blank if unknown.") from exc
+            if not (0 <= accuracy <= 1_000_000):
+                raise ValueError("Accuracy must be between 0 and 1,000,000 metres.")
+        note = str(notes or "").strip()
+        if len(note) > 2000:
+            raise ValueError("Location notes must be 2,000 characters or fewer.")
+        if not evidence_id.strip():
+            raise ValueError("Import the authorized source record into the evidence vault first.")
+        evidence = self.get_evidence(evidence_id.strip())
+        if evidence["case_id"] != case_id:
+            raise ValueError("Source evidence must belong to the same case.")
+        evidence_path = self.vault_dir / evidence["stored_path"]
+        if not evidence_path.is_file() or sha256_file(evidence_path) != evidence["sha256"]:
+            raise ValueError("Source evidence is missing or its SHA-256 no longer matches; verify it before recording a location.")
+        location_id = "LOC-" + uuid.uuid4().hex[:12].upper()
+        created_at, who = utc_now(), (actor or self.actor)[:80]
+        with self._write() as con:
+            con.execute(
+                "INSERT INTO location_records(location_id,case_id,phone_id,observed_at_utc,latitude,longitude,accuracy_m,source_label,legal_basis,authority_reference,evidence_id,evidence_sha256,notes,created_at,created_by) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (location_id, case_id, phone_id, observed_utc, lat, lon, accuracy, source_label,
+                 legal_basis, reference, evidence_id, evidence["sha256"], note, created_at, who),
+            )
+            con.execute("UPDATE cases SET updated_at=? WHERE case_id=?", (created_at, case_id))
+            self._event(con, "AUTHORIZED_LOCATION_RECORD_ADDED", case_id, {
+                "location_id": location_id, "phone_id": phone_id,
+                "observed_at_utc": observed_utc, "latitude": lat, "longitude": lon,
+                "accuracy_m": accuracy, "source_label": source_label, "legal_basis": legal_basis,
+                "authority_reference": reference, "evidence_id": evidence_id,
+                "evidence_sha256": evidence["sha256"],
+            }, who)
+        return self.get_location_record(location_id)
+
+    def get_location_record(self, location_id: str) -> dict[str, Any]:
+        with closing(self._connect()) as con:
+            row = con.execute(
+                "SELECT l.*, p.phone_number, e.original_name AS evidence_filename "
+                "FROM location_records l "
+                "JOIN phone_leads p ON p.phone_id=l.phone_id "
+                "JOIN evidence e ON e.evidence_id=l.evidence_id "
+                "WHERE l.location_id=?",
+                (location_id,),
+            ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown location record: {location_id}")
+        return dict(row)
+
+    def list_location_records(self, case_id: str, phone_id: str | None = None) -> list[dict[str, Any]]:
+        self.get_case(case_id)
+        query = (
+            "SELECT l.*, p.phone_number, e.original_name AS evidence_filename "
+            "FROM location_records l "
+            "JOIN phone_leads p ON p.phone_id=l.phone_id "
+            "JOIN evidence e ON e.evidence_id=l.evidence_id "
+            "WHERE l.case_id=?"
+        )
+        values: list[Any] = [case_id]
+        if phone_id:
+            query += " AND l.phone_id=?"
+            values.append(phone_id)
+        query += " ORDER BY l.observed_at_utc, l.location_id"
+        with closing(self._connect()) as con:
+            rows = con.execute(query, values).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_location_map_opened(self, location_id: str) -> None:
+        """Audit the operator's explicit request to open an external map for a record."""
+        item = self.get_location_record(location_id)
+        with self._write() as con:
+            self._event(con, "LOCATION_MAP_OPEN_REQUESTED", item["case_id"], {
+                "location_id": location_id, "map_service": "OpenStreetMap",
+                "external_service_receives_coordinates": True,
+            })
+
     def case_summary(self, case_id: str) -> dict[str, Any]:
         case = self.get_case(case_id)
         with closing(self._connect()) as con:
             evidence_count = con.execute("SELECT COUNT(*) FROM evidence WHERE case_id=?", (case_id,)).fetchone()[0]
             indicator_count = con.execute("SELECT COUNT(*) FROM indicators WHERE case_id=?", (case_id,)).fetchone()[0]
             note_count = con.execute("SELECT COUNT(*) FROM notes WHERE case_id=?", (case_id,)).fetchone()[0]
+            phone_lead_count = con.execute("SELECT COUNT(*) FROM phone_leads WHERE case_id=?", (case_id,)).fetchone()[0]
+            location_record_count = con.execute("SELECT COUNT(*) FROM location_records WHERE case_id=?", (case_id,)).fetchone()[0]
         return {
             **case, "evidence_count": evidence_count, "indicator_count": indicator_count,
             "correlation_count": len(self.correlations(case_id)), "note_count": note_count,
+            "phone_lead_count": phone_lead_count, "location_record_count": location_record_count,
         }
 
     def audit_integrity(self) -> dict[str, Any]:
