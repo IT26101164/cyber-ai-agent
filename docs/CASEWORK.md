@@ -11,6 +11,7 @@ The Casework window is opened from **JARVIS Plus → Casework**. It stores data 
 - Extract IP addresses, domains, URLs, email addresses and 64-character SHA-256 values from supported text/log formats (up to 5 MiB for text parsing).
 - Correlate the same indicator across separate evidence files and list the files where it appears.
 - Record investigator notes, an audit timeline and exportable JSON Lines audit events.
+- Export a structured JSON case report containing case metadata, evidence hashes/provenance, extracted indicators, repeated-indicator leads, notes and a case audit-timeline snapshot. The report is hashed and the export event is added to the live audit log.
 - Verify a hash chain over audit events and validate stored note hashes.
 
 ## Start
@@ -29,6 +30,7 @@ Click the **Casework** icon in the JARVIS left rail to open the workbench.
 - Only import evidence you are authorized to possess and analyze.
 - The app copies selected files into a local vault; it does not contact the source platform, phone, service provider, or any remote device.
 - SHA-256 match means the stored copy matches the digest recorded at acquisition. It does not prove that the source is authentic, complete, or legally admissible.
+- JSON case reports include metadata and analysis output, not the original evidence bytes. The export event is added to the live audit trail after the report snapshot, so the snapshot does not contain its own export event.
 - Audit events are hash-chained and tamper-evident against casual edits, not digitally signed or impossible to alter by an attacker who controls the database. Export audit records promptly to a separately controlled location for formal workflows.
 - Indicator matches are investigative leads, not identity attribution. Shared IP addresses/domains may be used by unrelated users; time, source, context and alternative explanations must be checked.
 - No threat-intelligence, geo-location, telecom, financial, law-enforcement or social-platform API is connected. The app does not find a person's live location.
