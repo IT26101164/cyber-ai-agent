@@ -7,6 +7,7 @@ from cyberai.llm import ModelError, ask_cloud, ask_local
 from cyberai.memory import MemoryStore
 from cyberai.research import fetch_public_page
 from cyberai.response import get_playbook
+from cyberai.simulator import simulate
 
 ROOT = Path(__file__).resolve().parent.parent
 MEMORY = MemoryStore(ROOT / "data" / "memory.db")
@@ -20,17 +21,20 @@ def help_text() -> str:
   /memory KEYWORDS    Search saved notes
   /analyze-log FILE   Analyze a .log/.txt file inside logs/
   /incident TYPE      Show an incident-response checklist
+  /simulate SCENARIO  Run a synthetic red/blue-team exercise (no real attack)
   /research HTTPS_URL Fetch a page from an allowlisted documentation host
   /cloud TEXT         Send a prompt to the configured cloud model
   /help               Show commands
   /quit               Exit
 Incident types: social-account-compromise, email-compromise,
                 windows-suspicious-activity, phishing
+Simulation scenarios: phishing, suspicious-powershell, account-takeover,
+                      ransomware-warning
 Normal text uses the local Ollama model."""
 
 
 def main() -> None:
-    print("CyberAI 0.2 | defensive research and incident-response assistant")
+    print("CyberAI 0.3 | defensive research, response, and safe simulation")
     print(help_text())
     while True:
         try:
@@ -63,6 +67,10 @@ def main() -> None:
             elif line.startswith("/incident "):
                 result = get_playbook(line[len("/incident "):].strip())
                 AUDIT.write("incident_playbook_shown", incident_type=result["type"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            elif line.startswith("/simulate "):
+                result = simulate(line[len("/simulate "):].strip())
+                AUDIT.write("simulation_completed", scenario=result["simulation"], mode=result["mode"])
                 print(json.dumps(result, indent=2, ensure_ascii=False))
             elif line.startswith("/research "):
                 result = fetch_public_page(line[len("/research "):].strip())
