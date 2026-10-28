@@ -116,7 +116,7 @@ def assess_connections(
             score += 15
             reasons.append("Port sometimes appears in lab tooling; port number alone proves nothing")
         if score:
-            level = "HIGH REVIEW" if score >= 40 else "REVIEW" if score >= 20 else "INFO"
+            level = "HIGH REVIEW" if score >= 30 else "REVIEW" if score >= 20 else "INFO"
             alerts.append({
                 "level": level, "score": min(score, 100), "pid": pid,
                 "process": names.get(pid, "Unknown process"),
@@ -201,7 +201,6 @@ class JarvisPlus:
         self._build_styles()
         self._build_layout()
         self.refresh()
-        self.simulate()
         self._animate()
         self._poll()
         self.root.bind("<F11>", lambda _e: self.toggle_fullscreen())
@@ -282,6 +281,7 @@ class JarvisPlus:
         for label, icon in [
             ("Overview", "▦"), ("Incidents", "△"), ("Network", "⌁"),
             ("Threats", "◉"), ("Assets", "▣"), ("Reports", "▤"), ("AI Insights", "✧"),
+            ("Casework", "⌑"),
         ]:
             btn = tk.Button(
                 rail, text=icon, command=lambda name=label: self._nav_action(name),
@@ -517,6 +517,16 @@ class JarvisPlus:
             self.focus_alerts()
         elif name == "Reports":
             self.speak_status()
+        elif name == "Casework":
+            try:
+                existing = getattr(self, "casework_window", None)
+                if existing is not None and existing.window.winfo_exists():
+                    existing.window.lift()
+                else:
+                    from .casework import open_casework
+                    self.casework_window = open_casework(self.root)
+            except Exception as exc:
+                messagebox.showerror("Casework unavailable", str(exc), parent=self.root)
         else:
             messagebox.showinfo("JARVIS", "This screen is a read-only local monitoring preview. No external threat feed is configured.")
 

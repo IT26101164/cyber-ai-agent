@@ -34,6 +34,17 @@ class JarvisPlusHelperTests(unittest.TestCase):
         self.assertIn("verify", findings[0]["reason"])
         self.assertEqual(findings[0]["process"], "demo")
 
+    def test_combined_review_signals_can_reach_high_review(self):
+        rows = [
+            {"LocalAddress":"0.0.0.0","LocalPort":4444,"RemoteAddress":"0.0.0.0",
+             "RemotePort":4444,"State":"Listen","OwningProcess":44}
+            for _ in range(80)
+        ]
+        findings = assess_connections(rows, {"44":"demo"})
+        self.assertTrue(findings)
+        self.assertEqual(findings[0]["level"], "HIGH REVIEW")
+        self.assertIn("verify", findings[0]["reason"])
+
     def test_established_external_connection_alone_is_not_an_alert(self):
         rows = [{"LocalAddress":"192.168.1.10","LocalPort":50000,"RemoteAddress":"203.0.113.8",
                  "RemotePort":443,"State":"Established","OwningProcess":44}]
