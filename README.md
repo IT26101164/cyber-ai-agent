@@ -143,3 +143,14 @@ Launch the separate visual dashboard from the repository root:
 It provides a dark desktop UI with a read-only Windows TCP connection-table view (local/remote endpoint, state, and PID) plus a separate simulated messaging packet-flow lab. The simulation is fictional and does not connect to WhatsApp or send messages. The live view displays connection metadata only; it is not a packet sniffer and does not reveal encrypted message contents. No Administrator privileges or extra Python packages are required for this first version.
 
 See [docs/JARVIS_DASHBOARD.md](docs/JARVIS_DASHBOARD.md) for launch instructions and limitations.
+
+
+### JARVIS Plus dashboard (enhanced, optional)
+
+Run the original dashboard with `python -m cyberai.jarvis_app`, or the enhanced version with:
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m cyberai.jarvis_plus
+```
+
+JARVIS Plus adds animated synthetic network flow, F11 fullscreen (Esc exits), process names for read-only TCP connection metadata, and explainable heuristic triage hints. Hints are not malware verdicts; verify the context. It never captures payloads or blocks/kills connections. Optional voice packages: `python -m pip install pyttsx3 SpeechRecognition pyaudio`. Voice recognition may send recognized audio to Google's service; avoid using it for sensitive speech. The dashboard works without voice extras.
