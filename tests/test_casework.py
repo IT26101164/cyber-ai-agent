@@ -88,6 +88,20 @@ class CaseStoreTests(unittest.TestCase):
         self.assertTrue(all(isinstance(json.loads(line), dict) for line in lines))
         self.assertTrue(self.store.audit_integrity()["ok"])
 
+    def test_note_content_hash_is_verified(self):
+        case = self._case()
+        note = self.store.add_note(case["case_id"], "Original analyst note.")
+        self.assertEqual(self.store.list_notes(case["case_id"])[0]["note"], "Original analyst note.")
+        con = self.store._connect()
+        try:
+            con.execute("UPDATE notes SET note=? WHERE note_id=?", ("Edited note", note["note_id"]))
+            con.commit()
+        finally:
+            con.close()
+        result = self.store.audit_integrity()
+        self.assertFalse(result["ok"])
+        self.assertIn("note content mismatch", result["reason"].lower())
+
     def test_audit_chain_detects_modified_event(self):
         case = self._case()
         con = self.store._connect()
