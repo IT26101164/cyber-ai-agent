@@ -43,3 +43,10 @@ Text-to-speech uses the local OS voice engine when available. Voice input uses t
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+
+## Case & Evidence Workbench
+
+Open **Casework** from the left icon rail in JARVIS Plus. This launches the local case manager. It supports local case records, selected-file evidence import and SHA-256, text indicator extraction, cross-file correlation leads, investigator notes, a tamper-evident event chain and JSONL export.
+
+Full documentation: [CASEWORK.md](CASEWORK.md). This workbench uses local data only; it does not query police databases, telecom operators, social platforms, location services or external threat feeds. Evidence storage is not encrypted by this module, so protect the Windows user profile and drive.
