@@ -121,6 +121,34 @@ class CaseStoreTests(unittest.TestCase):
         self.assertEqual(summary["evidence_count"], 0)
         self.assertEqual(summary["note_count"], 1)
 
+    def test_case_report_export_contains_metadata_and_records_export(self):
+        case = self._case()
+        source = self._write("login.log", "Connection from 198.51.100.22 to https://example.invalid/login")
+        evidence = self.store.add_evidence(case["case_id"], source, "Victim-provided log")
+        self.store.add_note(case["case_id"], "Compare the login time with the transaction record.")
+        destination = self.root / "exports" / "case-report.json"
+        result = self.store.export_case_report(case["case_id"], destination)
+        payload = destination.read_bytes()
+        report = json.loads(payload.decode("utf-8"))
+        self.assertEqual(result["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(report["case"]["case_id"], case["case_id"])
+        self.assertEqual(report["evidence"][0]["sha256"], evidence["sha256"])
+        self.assertTrue(any(item["indicator_type"] == "ipv4" for item in report["indicators"]))
+        self.assertTrue(any(item["event"] == "NOTE_ADDED" for item in report["case_audit_timeline"]))
+        self.assertTrue(self.store.audit_integrity()["ok"])
+        events = [item["event"] for item in self.store.timeline(case["case_id"])]
+        self.assertEqual(events[-1], "CASE_REPORT_EXPORTED")
+
+    def test_case_report_export_refuses_vault_and_overwrite(self):
+        case = self._case()
+        with self.assertRaises(ValueError):
+            self.store.export_case_report(case["case_id"], self.store.db_path)
+        dest = self.root / "report.json"
+        dest.write_text("keep", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            self.store.export_case_report(case["case_id"], dest)
+        self.assertEqual(dest.read_text(encoding="utf-8"), "keep")
+
     def test_sha256_file_helper(self):
         file_path = self._write("hash.txt", "abc")
         self.assertEqual(sha256_file(file_path), hashlib.sha256(b"abc").hexdigest())
