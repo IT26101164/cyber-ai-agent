@@ -248,17 +248,10 @@ class JarvisPlus:
         cards.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         for col in range(4):
             cards.grid_columnconfigure(col, weight=1, uniform="metrics")
-        self.conn_metric = self.metric(cards, "TCP CONNECTIONS", "—", CYAN)[1]
-        self.est_metric = self.metric(cards, "ESTABLISHED", "—", GREEN)[1]
-        self.process_metric = self.metric(cards, "PROCESSES SEEN", "—", AMBER)[1]
-        self.alert_metric = self.metric(cards, "REVIEW HINTS", "0", RED)[1]
         for i, (title, value, color) in enumerate((
             ("TCP CONNECTIONS", "—", CYAN), ("ESTABLISHED", "—", GREEN),
             ("PROCESSES SEEN", "—", AMBER), ("REVIEW HINTS", "0", RED)
         )):
-            # Replace the metric label created above with a single compact card.
-            for child in cards.grid_slaves(row=0, column=i):
-                child.destroy()
             card, val = self.metric(cards, title, value, color)
             card.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 4, 0))
             if i == 0: self.conn_metric = val
