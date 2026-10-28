@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cyberai.casework import CaseStore, extract_indicators, sha256_file
+from cyberai.casework import CaseStore, extract_indicators, extract_timestamps, sha256_file
 
 
 class CaseStoreTests(unittest.TestCase):
@@ -70,6 +70,55 @@ class CaseStoreTests(unittest.TestCase):
         self.assertIn(("domain", "example.invalid"), shared)
         self.assertTrue(all(lead["evidence_count"] >= 2 for lead in leads))
 
+    def test_extract_timestamps_normalizes_offsets_and_preserves_unknown_timezone(self):
+        events = extract_timestamps(
+            "2026-10-28T10:30:00+05:30 login from 198.51.100.7\n"
+            "2026-10-28 09:45:00 local time with no offset\n"
+            "[28/Oct/2026:11:15:00 +0000] Apache request\n"
+            "Oct 28 11:15:00 legacy syslog without year"
+        )
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0]["timestamp_utc"], "2026-10-28T05:00:00+00:00")
+        self.assertEqual(events[0]["timezone_status"], "EXPLICIT_OFFSET")
+        self.assertIsNone(events[1]["timestamp_utc"])
+        self.assertEqual(events[1]["timezone_status"], "UNSPECIFIED")
+        self.assertEqual(events[2]["parser"], "APACHE")
+        self.assertEqual(events[2]["timestamp_utc"], "2026-10-28T11:15:00+00:00")
+
+    def test_evidence_timeline_correlates_indicators_with_source_lines(self):
+        case = self._case()
+        first = self._write(
+            "first.log",
+            "2026-10-28T10:30:00Z connection from 198.51.100.22\n"
+            "2026-10-28T10:31:00Z another entry"
+        )
+        second = self._write(
+            "second.log",
+            "2026-10-28T10:35:00+00:00 repeated address 198.51.100.22"
+        )
+        self.store.add_evidence(case["case_id"], first, "Operator-authorized sample log")
+        self.store.add_evidence(case["case_id"], second, "Operator-authorized second log")
+        timeline = self.store.evidence_timeline(case["case_id"])
+        self.assertEqual(timeline["event_count"], 3)
+        self.assertEqual(timeline["evidence_files_scanned"], 2)
+        self.assertEqual(timeline["events"][0]["timestamp_utc"], "2026-10-28T10:30:00+00:00")
+        self.assertEqual(timeline["events"][0]["line_number"], 1)
+        address_lead = next(
+            item for item in timeline["timeline_correlation_leads"]
+            if item["indicator_type"] == "ipv4" and item["value"] == "198.51.100.22"
+        )
+        self.assertEqual(address_lead["evidence_count"], 2)
+        self.assertIn("does not identify a person", address_lead["interpretation"])
+
+    def test_evidence_timeline_skips_hash_mismatched_content(self):
+        case = self._case()
+        source = self._write("changed.log", "2026-10-28T10:30:00Z login")
+        item = self.store.add_evidence(case["case_id"], source, "Authorized sample log")
+        Path(item["absolute_path"]).write_text("2026-10-28T10:31:00Z modified content", encoding="utf-8")
+        timeline = self.store.evidence_timeline(case["case_id"])
+        self.assertEqual(timeline["event_count"], 0)
+        self.assertTrue(any("SHA-256 mismatch" in warning["reason"] for warning in timeline["warnings"]))
+
     def test_indicator_extraction_validates_ipv4(self):
         values = set(extract_indicators("bad IP 999.999.999.999 and valid 192.0.2.7, user@example.invalid"))
         self.assertIn(("ipv4", "192.0.2.7"), values)
@@ -123,7 +172,7 @@ class CaseStoreTests(unittest.TestCase):
 
     def test_case_report_export_contains_metadata_and_records_export(self):
         case = self._case()
-        source = self._write("login.log", "Connection from 198.51.100.22 to https://example.invalid/login")
+        source = self._write("login.log", "2026-10-28T10:30:00Z Connection from 198.51.100.22 to https://example.invalid/login")
         evidence = self.store.add_evidence(case["case_id"], source, "Victim-provided log")
         self.store.add_note(case["case_id"], "Compare the login time with the transaction record.")
         destination = self.root / "exports" / "case-report.json"
@@ -135,6 +184,8 @@ class CaseStoreTests(unittest.TestCase):
         self.assertEqual(report["evidence"][0]["sha256"], evidence["sha256"])
         self.assertTrue(any(item["indicator_type"] == "ipv4" for item in report["indicators"]))
         self.assertTrue(any(item["event"] == "NOTE_ADDED" for item in report["case_audit_timeline"]))
+        self.assertEqual(report["report_schema"], "cyberai.case-report.v2")
+        self.assertEqual(report["evidence_timeline"]["event_count"], 1)
         self.assertTrue(self.store.audit_integrity()["ok"])
         events = [item["event"] for item in self.store.timeline(case["case_id"])]
         self.assertEqual(events[-1], "CASE_REPORT_EXPORTED")

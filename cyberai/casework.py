@@ -60,6 +60,19 @@ EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,63}\b")
 DOMAIN_RE = re.compile(r"(?i)(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?![\w.-])")
 SHA256_RE = re.compile(r"(?i)\b[a-f0-9]{64}\b")
 
+# Require a full calendar date; ambiguous syslog fragments without a year are ignored.
+ISO_TIMESTAMP_RE = re.compile(
+    r"(?<!\d)(?P<timestamp>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?)(?!\d)"
+)
+APACHE_TIMESTAMP_RE = re.compile(
+    r"\[(?P<timestamp>\d{1,2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})\]"
+)
+RFC2822_TIMESTAMP_RE = re.compile(
+    r"(?P<timestamp>\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+\d{1,2}\s+"
+    r"[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4}\b)"
+)
+
 
 def utc_now() -> str:
     """UTC timestamp in an unambiguous ISO-8601 format."""
@@ -110,6 +123,55 @@ def extract_indicators(text: str) -> list[tuple[str, str]]:
         if domain and "@" not in domain:
             found.add(("domain", domain))
     return sorted(found, key=lambda item: (item[0], item[1]))
+
+
+def extract_timestamps(text: str) -> list[dict[str, Any]]:
+    """Extract dated events without guessing missing years or time zones.
+
+    Supports ISO-8601, Apache access-log dates, and RFC-2822 mail dates.
+    Naive timestamps are retained as recorded and are never labeled UTC.
+    """
+    patterns = (
+        (ISO_TIMESTAMP_RE, "ISO-8601"),
+        (APACHE_TIMESTAMP_RE, "APACHE"),
+        (RFC2822_TIMESTAMP_RE, "RFC-2822"),
+    )
+    events: list[dict[str, Any]] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        if len(raw_line) > 8192:
+            continue
+        matches: list[tuple[int, int, str, str]] = []
+        for pattern, parser_name in patterns:
+            for match in pattern.finditer(raw_line):
+                matches.append((match.start("timestamp"), match.end("timestamp"), match.group("timestamp"), parser_name))
+        matches.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+        accepted: list[tuple[int, int, str, str]] = []
+        for candidate in matches:
+            if any(candidate[0] < end and candidate[1] > start for start, end, _, _ in accepted):
+                continue
+            accepted.append(candidate)
+        for _start, _end, raw_timestamp, parser_name in accepted:
+            try:
+                if parser_name == "APACHE":
+                    parsed = datetime.strptime(raw_timestamp, "%d/%b/%Y:%H:%M:%S %z")
+                elif parser_name == "RFC-2822":
+                    fmt = "%a, %d %b %Y %H:%M:%S %z" if "," in raw_timestamp else "%a %d %b %Y %H:%M:%S %z"
+                    parsed = datetime.strptime(raw_timestamp, fmt)
+                else:
+                    parsed = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            aware = parsed.tzinfo is not None and parsed.utcoffset() is not None
+            events.append({
+                "timestamp_raw": raw_timestamp,
+                "timestamp_utc": parsed.astimezone(timezone.utc).isoformat(timespec="seconds") if aware else None,
+                "timestamp_wall": parsed.replace(tzinfo=None).isoformat(timespec="seconds"),
+                "timezone_status": "EXPLICIT_OFFSET" if aware else "UNSPECIFIED",
+                "parser": parser_name,
+                "line_number": line_number,
+                "context": raw_line.strip()[:600],
+            })
+    return events
 
 
 class CaseStore:
@@ -448,6 +510,94 @@ class CaseStore:
             result.append(item)
         return result
 
+    def evidence_timeline(self, case_id: str, limit: int = 2000) -> dict[str, Any]:
+        """Build a best-effort timeline from hash-verified, locally imported text evidence."""
+        self.get_case(case_id)
+        events: list[dict[str, Any]] = []
+        warnings: list[dict[str, str]] = []
+        scanned = 0
+        for evidence in self.list_evidence(case_id):
+            filename = evidence["original_name"]
+            evidence_id = evidence["evidence_id"]
+            if Path(filename).suffix.lower() not in TEXT_EXTENSIONS:
+                warnings.append({"evidence_id": evidence_id, "filename": filename, "reason": "Unsupported file type for timestamp parsing"})
+                continue
+            if int(evidence["size_bytes"]) > MAX_TEXT_SCAN_BYTES:
+                warnings.append({"evidence_id": evidence_id, "filename": filename, "reason": "Text exceeds the 5 MiB timestamp-parsing limit"})
+                continue
+            path = self.vault_dir / evidence["stored_path"]
+            if not path.is_file():
+                warnings.append({"evidence_id": evidence_id, "filename": filename, "reason": "Stored evidence file is missing"})
+                continue
+            try:
+                if sha256_file(path) != evidence["sha256"]:
+                    warnings.append({"evidence_id": evidence_id, "filename": filename, "reason": "SHA-256 mismatch; content was not parsed"})
+                    continue
+                text_value = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                warnings.append({"evidence_id": evidence_id, "filename": filename, "reason": f"Read error: {str(exc)[:160]}"})
+                continue
+            scanned += 1
+            for event in extract_timestamps(text_value):
+                try:
+                    parsed = datetime.fromisoformat(event["timestamp_utc"]) if event["timestamp_utc"] else datetime.fromisoformat(event["timestamp_wall"]).replace(tzinfo=timezone.utc)
+                    sort_epoch = parsed.timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    sort_epoch = 0.0
+                indicators = [
+                    {"indicator_type": kind, "value": value}
+                    for kind, value in extract_indicators(event["context"])
+                ]
+                events.append({
+                    **event,
+                    "evidence_id": evidence_id,
+                    "filename": filename,
+                    "evidence_sha256": evidence["sha256"],
+                    "indicators": indicators,
+                    "_sort_epoch": sort_epoch,
+                })
+        events.sort(key=lambda item: (item["_sort_epoch"], item["evidence_id"], item["line_number"]))
+        events = events[:max(1, min(int(limit), 5000))]
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for event in events:
+            for indicator in event["indicators"]:
+                key = (indicator["indicator_type"], indicator["value"])
+                lead = grouped.setdefault(key, {
+                    "indicator_type": key[0], "value": key[1],
+                    "evidence_ids": set(), "filenames": set(), "event_refs": [],
+                })
+                lead["evidence_ids"].add(event["evidence_id"])
+                lead["filenames"].add(event["filename"])
+                lead["event_refs"].append({
+                    "evidence_id": event["evidence_id"],
+                    "filename": event["filename"],
+                    "line_number": event["line_number"],
+                    "timestamp_raw": event["timestamp_raw"],
+                    "timestamp_utc": event["timestamp_utc"],
+                    "timezone_status": event["timezone_status"],
+                })
+        correlations = []
+        for lead in grouped.values():
+            if len(lead["evidence_ids"]) >= 2:
+                correlations.append({
+                    "indicator_type": lead["indicator_type"],
+                    "value": lead["value"],
+                    "evidence_count": len(lead["evidence_ids"]),
+                    "evidence_ids": sorted(lead["evidence_ids"]),
+                    "filenames": sorted(lead["filenames"]),
+                    "event_refs": lead["event_refs"][:50],
+                    "interpretation": "Indicator appears in timestamped lines from separate evidence files; review clock settings, context and alternative explanations. This does not identify a person.",
+                })
+        correlations.sort(key=lambda item: (-item["evidence_count"], item["indicator_type"], item["value"]))
+        return {
+            "events": events,
+            "timeline_correlation_leads": correlations,
+            "warnings": warnings,
+            "evidence_files_scanned": scanned,
+            "event_count": len(events),
+            "ordering_note": "Entries with no explicit timezone are placed by their recorded wall-clock value as a convenience; their order relative to timezone-aware events may be wrong.",
+        }
+
     def case_summary(self, case_id: str) -> dict[str, Any]:
         case = self.get_case(case_id)
         with closing(self._connect()) as con:
@@ -513,12 +663,19 @@ class CaseStore:
                 )
             })
         report = {
-            "report_schema": "cyberai.case-report.v1",
+            "report_schema": "cyberai.case-report.v2",
             "exported_at_utc": utc_now(),
             "case": case,
             "evidence": evidence,
             "indicators": self.list_indicators(case_id),
             "repeated_indicator_leads": self.correlations(case_id),
+            "evidence_timeline": {
+                **{key: value for key, value in self.evidence_timeline(case_id).items() if key != "events"},
+                "events": [
+                    {key: value for key, value in event.items() if not key.startswith("_")}
+                    for event in self.evidence_timeline(case_id)["events"]
+                ],
+            },
             "investigator_notes": self.list_notes(case_id),
             "case_audit_timeline": self.timeline(case_id),
             "interpretation_guardrails": [
@@ -526,6 +683,7 @@ class CaseStore:
                 "A shared IP address or domain does not establish common ownership or intent.",
                 "SHA-256 confirms the exported/stored copy matches the recorded digest, not source authenticity or legal admissibility.",
                 "The report contains case metadata and analysis output, not the original evidence file contents.",
+                "Evidence timeline timestamps are parsed from imported text only; missing timezone offsets remain unknown and can affect ordering.",
             ],
             "limitations": [
                 "This report reflects only locally imported evidence and recorded notes at export time.",
@@ -625,6 +783,7 @@ class CaseworkWindow:
             ("VERIFY HASHES", self.verify_hashes, CYAN),
             ("CORRELATIONS", self.show_correlations, TEAL),
             ("TIMELINE", self.show_timeline, WHITE),
+            ("EVIDENCE TIMELINE", self.show_evidence_timeline, CYAN),
             ("EXPORT CASE REPORT", self.export_case_report, GREEN),
             ("EXPORT AUDIT", self.export_audit, VIOLET),
         ]
@@ -936,6 +1095,52 @@ class CaseworkWindow:
             return
         self._load_case()
         self.notebook.select(self.timeline_tab)
+
+    def show_evidence_timeline(self):
+        case_id = self._require_case()
+        if not case_id:
+            return
+        try:
+            analysis = self.store.evidence_timeline(case_id)
+            rows: list[tuple[float, tuple[str, str, str, str]]] = []
+            for item in self.store.timeline(case_id):
+                try:
+                    epoch = datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    epoch = 0.0
+                details = json.dumps(item["details"], ensure_ascii=False, sort_keys=True)
+                rows.append((epoch, (
+                    item["timestamp"], item["event"], item["actor"], details[:400],
+                )))
+            for event in analysis["events"]:
+                shown_time = event["timestamp_utc"] or f"TZ UNKNOWN • {event['timestamp_raw']}"
+                details = (
+                    f"{event['filename']}:L{event['line_number']} • {event['timezone_status']} • "
+                    f"{event['parser']} • {event['context']}"
+                )
+                if event["indicators"]:
+                    labels = ", ".join(
+                        f"{entry['indicator_type']}={entry['value']}" for entry in event["indicators"][:5]
+                    )
+                    details += f" • indicators: {labels}"
+                rows.append((event["_sort_epoch"], (
+                    shown_time, "EVIDENCE_TIMESTAMP", f"{event['evidence_id']}:L{event['line_number']}", details[:400],
+                )))
+            self._clear_tree(self.timeline_tree)
+            for _epoch, values in sorted(rows, key=lambda row: row[0]):
+                self.timeline_tree.insert("", "end", values=values)
+            self.notebook.select(self.timeline_tab)
+            self.status_bar.configure(
+                text=(
+                    f"Evidence timeline: {analysis['event_count']} timestamped event(s) from "
+                    f"{analysis['evidence_files_scanned']} verified text file(s); "
+                    f"{len(analysis['timeline_correlation_leads'])} cross-file lead(s), "
+                    f"{len(analysis['warnings'])} warning(s). "
+                    "Timezone-unknown rows have approximate ordering only."
+                )
+            )
+        except Exception as exc:
+            messagebox.showerror("Evidence timeline failed", str(exc), parent=self.window)
 
     def export_case_report(self):
         case_id = self._require_case()
