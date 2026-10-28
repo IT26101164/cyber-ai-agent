@@ -93,7 +93,7 @@ def main() -> None:
                 result = PLANS.create(goal, ask_local)
                 AUDIT.write("plan_created", plan_id=result["id"], status=result["status"])
                 print(json.dumps(result, indent=2, ensure_ascii=False))
-                print("\\nNo commands or actions were executed. Approval is for manual follow-through only.")
+                print("No commands or actions were executed. Approval is for manual follow-through only.")
             elif line == "/plans":
                 plans = PLANS.list()
                 summary = [{
