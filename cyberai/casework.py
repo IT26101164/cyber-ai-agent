@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import uuid
+import webbrowser
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,24 @@ URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>\"']+")
 EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,63}\b")
 DOMAIN_RE = re.compile(r"(?i)(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?![\w.-])")
 SHA256_RE = re.compile(r"(?i)\b[a-f0-9]{64}\b")
+PHONE_RE = re.compile(r"(?<![\w+])\+(?:\d[ \t().-]*){7,14}\d(?!\w)")
+
+PHONE_LEAD_STATUSES = (
+    "UNVERIFIED", "COMPLAINANT", "WITNESS", "CONTACT", "SUBJECT_OF_INQUIRY",
+)
+PHONE_LEGAL_BASES = (
+    "LEAD_ONLY_NOT_LOCATION_AUTHORITY", "CONSENT", "WARRANT_OR_COURT_ORDER",
+    "AUTHORIZED_PROVIDER_RESPONSE", "OTHER_REVIEWED",
+)
+LOCATION_SOURCES = (
+    "PROVIDER_RESPONSE", "CONSENTED_DEVICE_EXPORT",
+    "OFFICER_ENTERED_FROM_RECORD", "OTHER_AUTHORIZED_SOURCE",
+)
+LOCATION_LEGAL_BASES = (
+    "CONSENT", "WARRANT_OR_COURT_ORDER",
+    "AUTHORIZED_PROVIDER_RESPONSE", "OTHER_REVIEWED",
+)
+
 
 # Require a full calendar date; ambiguous syslog fragments without a year are ignored.
 ISO_TIMESTAMP_RE = re.compile(
@@ -118,6 +137,10 @@ def extract_indicators(text: str) -> list[tuple[str, str]]:
             pass
     for match in SHA256_RE.findall(text):
         found.add(("sha256", match.lower()))
+    for match in PHONE_RE.findall(text):
+        digits = re.sub(r"\D", "", match)
+        if 8 <= len(digits) <= 15 and digits[0] != "0":
+            found.add(("phone", "+" + digits))
     for match in DOMAIN_RE.findall(text):
         domain = match.rstrip(".").lower()
         if domain and "@" not in domain:
@@ -172,6 +195,55 @@ def extract_timestamps(text: str) -> list[dict[str, Any]]:
                 "context": raw_line.strip()[:600],
             })
     return events
+
+
+def normalize_phone_number(value: str) -> str:
+    """Normalize an explicitly international telephone number to E.164.
+
+    The tool does not infer a country code from caller location or a number prefix.
+    """
+    raw = str(value or "").strip()
+    if raw.startswith("00"):
+        raw = "+" + raw[2:]
+    cleaned = re.sub(r"[\s().-]", "", raw)
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", cleaned):
+        raise ValueError("Enter an international number in E.164 format, e.g. +94712345678.")
+    return cleaned
+
+
+def validate_authority_reference(legal_basis: str, reference: str, *, location: bool = False) -> str:
+    """Require a traceable reference for authorization-dependent work."""
+    allowed = LOCATION_LEGAL_BASES if location else PHONE_LEGAL_BASES
+    if legal_basis not in allowed:
+        raise ValueError("Select a supported legal/consent basis.")
+    clean_ref = str(reference or "").strip()
+    if legal_basis != "LEAD_ONLY_NOT_LOCATION_AUTHORITY" and len(clean_ref) < 3:
+        raise ValueError("Enter the relevant consent, warrant/order, provider-request or reviewed-authority reference.")
+    if location and len(clean_ref) < 3:
+        raise ValueError("Location records require an authorization/consent reference.")
+    if len(clean_ref) > 300:
+        raise ValueError("Authority reference must be 300 characters or fewer.")
+    return clean_ref
+
+
+def parse_explicit_datetime(value: str) -> datetime:
+    """Parse an ISO-8601 datetime only when its timezone offset is explicit."""
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Use ISO-8601 date/time with an explicit timezone, e.g. 2026-10-28T15:30:00+05:30.") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Timestamp must include a timezone offset; timezone-naive times are not accepted.")
+    return parsed.astimezone(timezone.utc)
+
+
+def openstreetmap_url(latitude: float, longitude: float) -> str:
+    """Return a map URL for manually supplied coordinates, never a phone-number lookup."""
+    lat, lon = float(latitude), float(longitude)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("Coordinates are outside valid latitude/longitude ranges.")
+    return f"https://www.openstreetmap.org/?mlat={lat:.6f}&mlon={lon:.6f}#map=16/{lat:.6f}/{lon:.6f}"
 
 
 class CaseStore:
@@ -240,6 +312,36 @@ class CaseStore:
                     value TEXT NOT NULL,
                     UNIQUE(evidence_id, indicator_type, value)
                 );
+                CREATE TABLE IF NOT EXISTS phone_leads (
+                    phone_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL REFERENCES cases(case_id),
+                    phone_number TEXT NOT NULL,
+                    lead_status TEXT NOT NULL CHECK(lead_status IN ('UNVERIFIED','COMPLAINANT','WITNESS','CONTACT','SUBJECT_OF_INQUIRY')),
+                    source_label TEXT NOT NULL,
+                    legal_basis TEXT NOT NULL CHECK(legal_basis IN ('LEAD_ONLY_NOT_LOCATION_AUTHORITY','CONSENT','WARRANT_OR_COURT_ORDER','AUTHORIZED_PROVIDER_RESPONSE','OTHER_REVIEWED')),
+                    authority_reference TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    UNIQUE(case_id, phone_number)
+                );
+                CREATE TABLE IF NOT EXISTS location_records (
+                    location_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL REFERENCES cases(case_id),
+                    phone_id TEXT NOT NULL REFERENCES phone_leads(phone_id),
+                    observed_at_utc TEXT NOT NULL,
+                    latitude REAL NOT NULL CHECK(latitude >= -90 AND latitude <= 90),
+                    longitude REAL NOT NULL CHECK(longitude >= -180 AND longitude <= 180),
+                    accuracy_m REAL,
+                    source_label TEXT NOT NULL CHECK(source_label IN ('PROVIDER_RESPONSE','CONSENTED_DEVICE_EXPORT','OFFICER_ENTERED_FROM_RECORD','OTHER_AUTHORIZED_SOURCE')),
+                    legal_basis TEXT NOT NULL CHECK(legal_basis IN ('CONSENT','WARRANT_OR_COURT_ORDER','AUTHORIZED_PROVIDER_RESPONSE','OTHER_REVIEWED')),
+                    authority_reference TEXT NOT NULL,
+                    evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
+                    evidence_sha256 TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS notes (
                     note_id TEXT PRIMARY KEY,
                     case_id TEXT NOT NULL REFERENCES cases(case_id),
@@ -258,6 +360,9 @@ class CaseStore:
                     prev_hash TEXT NOT NULL,
                     event_hash TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_phone_leads_case ON phone_leads(case_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_location_case_time ON location_records(case_id, observed_at_utc);
+                CREATE INDEX IF NOT EXISTS idx_location_phone_time ON location_records(phone_id, observed_at_utc);
                 CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence(case_id, collected_at);
                 CREATE INDEX IF NOT EXISTS idx_indicators_case_value ON indicators(case_id, indicator_type, value);
                 CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_events(case_id, seq);
@@ -598,15 +703,204 @@ class CaseStore:
             "ordering_note": "Entries with no explicit timezone are placed by their recorded wall-clock value as a convenience; their order relative to timezone-aware events may be wrong.",
         }
 
+    def add_phone_lead(
+        self, case_id: str, phone_number: str, source_label: str,
+        lead_status: str = "UNVERIFIED",
+        legal_basis: str = "LEAD_ONLY_NOT_LOCATION_AUTHORITY",
+        authority_reference: str = "", notes: str = "",
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a phone-number lead; this performs no lookup, ping, or tracking."""
+        self.get_case(case_id)
+        normalized = normalize_phone_number(phone_number)
+        source = str(source_label or "").strip()
+        note = str(notes or "").strip()
+        if not 2 <= len(source) <= 300:
+            raise ValueError("Lead source must contain 2–300 characters.")
+        if lead_status not in PHONE_LEAD_STATUSES:
+            raise ValueError("Choose a supported lead classification; classifications do not imply guilt.")
+        reference = validate_authority_reference(legal_basis, authority_reference)
+        if len(note) > 2000:
+            raise ValueError("Notes must be 2,000 characters or fewer.")
+        phone_id = "PH-" + uuid.uuid4().hex[:12].upper()
+        created_at, who = utc_now(), (actor or self.actor)[:80]
+        with self._write() as con:
+            try:
+                con.execute(
+                    "INSERT INTO phone_leads(phone_id,case_id,phone_number,lead_status,source_label,legal_basis,authority_reference,notes,created_at,created_by) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (phone_id, case_id, normalized, lead_status, source, legal_basis, reference, note, created_at, who),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("This normalized phone number is already recorded in this case.") from exc
+            con.execute("UPDATE cases SET updated_at=? WHERE case_id=?", (created_at, case_id))
+            self._event(con, "PHONE_LEAD_ADDED", case_id, {
+                "phone_id": phone_id, "lead_status": lead_status, "source_label": source,
+                "legal_basis": legal_basis, "authority_reference": reference,
+                "phone_number_stored_locally": True,
+            }, who)
+        return self.get_phone_lead(phone_id)
+
+    def get_phone_lead(self, phone_id: str) -> dict[str, Any]:
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT * FROM phone_leads WHERE phone_id=?", (phone_id,)).fetchone()
+        if not row:
+            raise KeyError(f"Unknown phone lead: {phone_id}")
+        return dict(row)
+
+    def cross_case_phone_links(self, phone_id: str) -> dict[str, Any]:
+        """Find exact normalized-number repeats in this local case register; not identity attribution."""
+        selected = self.get_phone_lead(phone_id)
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT p.phone_id,p.case_id,p.lead_status,p.source_label,p.legal_basis,p.created_at,"
+                "c.title AS case_title,c.status AS case_status "
+                "FROM phone_leads p JOIN cases c ON c.case_id=p.case_id "
+                "WHERE p.phone_number=? ORDER BY p.case_id,p.created_at,p.phone_id",
+                (selected["phone_number"],),
+            ).fetchall()
+        matches = [dict(row) for row in rows]
+        case_ids = {item["case_id"] for item in matches}
+        other_case_ids = case_ids - {selected["case_id"]}
+        return {
+            "phone_id": phone_id,
+            "phone_number": selected["phone_number"],
+            "match_count": len(matches),
+            "case_count": len(case_ids),
+            "other_case_count": len(other_case_ids),
+            "matches": matches,
+            "interpretation": (
+                "Exact normalized phone number repeats in the local case register. "
+                "This is a lead for analyst review, not proof of common ownership, device control, "
+                "identity, intent, or involvement in an offence. Consider number recycling, spoofing, "
+                "shared phones and data-entry errors."
+            ),
+        }
+
+    def list_phone_leads(self, case_id: str) -> list[dict[str, Any]]:
+        self.get_case(case_id)
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT * FROM phone_leads WHERE case_id=? ORDER BY created_at, phone_id",
+                (case_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_location_record(
+        self, case_id: str, phone_id: str, observed_at: str,
+        latitude: float | str, longitude: float | str,
+        source_label: str, legal_basis: str, authority_reference: str,
+        evidence_id: str, accuracy_m: float | str | None = None,
+        notes: str = "", actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Record coordinates already present in authorized, imported evidence."""
+        self.get_case(case_id)
+        phone = self.get_phone_lead(phone_id)
+        if phone["case_id"] != case_id:
+            raise ValueError("Phone lead does not belong to the selected case.")
+        if source_label not in LOCATION_SOURCES:
+            raise ValueError("Choose a supported authorized location-record source.")
+        reference = validate_authority_reference(legal_basis, authority_reference, location=True)
+        observed_utc = parse_explicit_datetime(observed_at).isoformat(timespec="seconds")
+        try:
+            lat, lon = float(latitude), float(longitude)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Latitude and longitude must be numeric.") from exc
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError("Coordinates are outside valid latitude/longitude ranges.")
+        accuracy: float | None
+        if accuracy_m is None or str(accuracy_m).strip() == "":
+            accuracy = None
+        else:
+            try:
+                accuracy = float(accuracy_m)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Accuracy must be numeric in metres, or left blank if unknown.") from exc
+            if not (0 <= accuracy <= 1_000_000):
+                raise ValueError("Accuracy must be between 0 and 1,000,000 metres.")
+        note = str(notes or "").strip()
+        if len(note) > 2000:
+            raise ValueError("Location notes must be 2,000 characters or fewer.")
+        if not evidence_id.strip():
+            raise ValueError("Import the authorized source record into the evidence vault first.")
+        evidence = self.get_evidence(evidence_id.strip())
+        if evidence["case_id"] != case_id:
+            raise ValueError("Source evidence must belong to the same case.")
+        evidence_path = self.vault_dir / evidence["stored_path"]
+        if not evidence_path.is_file() or sha256_file(evidence_path) != evidence["sha256"]:
+            raise ValueError("Source evidence is missing or its SHA-256 no longer matches; verify it before recording a location.")
+        location_id = "LOC-" + uuid.uuid4().hex[:12].upper()
+        created_at, who = utc_now(), (actor or self.actor)[:80]
+        with self._write() as con:
+            con.execute(
+                "INSERT INTO location_records(location_id,case_id,phone_id,observed_at_utc,latitude,longitude,accuracy_m,source_label,legal_basis,authority_reference,evidence_id,evidence_sha256,notes,created_at,created_by) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (location_id, case_id, phone_id, observed_utc, lat, lon, accuracy, source_label,
+                 legal_basis, reference, evidence_id, evidence["sha256"], note, created_at, who),
+            )
+            con.execute("UPDATE cases SET updated_at=? WHERE case_id=?", (created_at, case_id))
+            self._event(con, "AUTHORIZED_LOCATION_RECORD_ADDED", case_id, {
+                "location_id": location_id, "phone_id": phone_id,
+                "observed_at_utc": observed_utc, "latitude": lat, "longitude": lon,
+                "accuracy_m": accuracy, "source_label": source_label, "legal_basis": legal_basis,
+                "authority_reference": reference, "evidence_id": evidence_id,
+                "evidence_sha256": evidence["sha256"],
+            }, who)
+        return self.get_location_record(location_id)
+
+    def get_location_record(self, location_id: str) -> dict[str, Any]:
+        with closing(self._connect()) as con:
+            row = con.execute(
+                "SELECT l.*, p.phone_number, e.original_name AS evidence_filename "
+                "FROM location_records l "
+                "JOIN phone_leads p ON p.phone_id=l.phone_id "
+                "JOIN evidence e ON e.evidence_id=l.evidence_id "
+                "WHERE l.location_id=?",
+                (location_id,),
+            ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown location record: {location_id}")
+        return dict(row)
+
+    def list_location_records(self, case_id: str, phone_id: str | None = None) -> list[dict[str, Any]]:
+        self.get_case(case_id)
+        query = (
+            "SELECT l.*, p.phone_number, e.original_name AS evidence_filename "
+            "FROM location_records l "
+            "JOIN phone_leads p ON p.phone_id=l.phone_id "
+            "JOIN evidence e ON e.evidence_id=l.evidence_id "
+            "WHERE l.case_id=?"
+        )
+        values: list[Any] = [case_id]
+        if phone_id:
+            query += " AND l.phone_id=?"
+            values.append(phone_id)
+        query += " ORDER BY l.observed_at_utc, l.location_id"
+        with closing(self._connect()) as con:
+            rows = con.execute(query, values).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_location_map_opened(self, location_id: str) -> None:
+        """Audit the operator's explicit request to open an external map for a record."""
+        item = self.get_location_record(location_id)
+        with self._write() as con:
+            self._event(con, "LOCATION_MAP_OPEN_REQUESTED", item["case_id"], {
+                "location_id": location_id, "map_service": "OpenStreetMap",
+                "external_service_receives_coordinates": True,
+            })
+
     def case_summary(self, case_id: str) -> dict[str, Any]:
         case = self.get_case(case_id)
         with closing(self._connect()) as con:
             evidence_count = con.execute("SELECT COUNT(*) FROM evidence WHERE case_id=?", (case_id,)).fetchone()[0]
             indicator_count = con.execute("SELECT COUNT(*) FROM indicators WHERE case_id=?", (case_id,)).fetchone()[0]
             note_count = con.execute("SELECT COUNT(*) FROM notes WHERE case_id=?", (case_id,)).fetchone()[0]
+            phone_lead_count = con.execute("SELECT COUNT(*) FROM phone_leads WHERE case_id=?", (case_id,)).fetchone()[0]
+            location_record_count = con.execute("SELECT COUNT(*) FROM location_records WHERE case_id=?", (case_id,)).fetchone()[0]
         return {
             **case, "evidence_count": evidence_count, "indicator_count": indicator_count,
             "correlation_count": len(self.correlations(case_id)), "note_count": note_count,
+            "phone_lead_count": phone_lead_count, "location_record_count": location_record_count,
         }
 
     def audit_integrity(self) -> dict[str, Any]:
@@ -663,10 +957,12 @@ class CaseStore:
                 )
             })
         report = {
-            "report_schema": "cyberai.case-report.v2",
+            "report_schema": "cyberai.case-report.v3",
             "exported_at_utc": utc_now(),
             "case": case,
             "evidence": evidence,
+            "phone_leads": self.list_phone_leads(case_id),
+            "authorized_location_records": self.list_location_records(case_id),
             "indicators": self.list_indicators(case_id),
             "repeated_indicator_leads": self.correlations(case_id),
             "evidence_timeline": {
@@ -684,6 +980,9 @@ class CaseStore:
                 "SHA-256 confirms the exported/stored copy matches the recorded digest, not source authenticity or legal admissibility.",
                 "The report contains case metadata and analysis output, not the original evidence file contents.",
                 "Evidence timeline timestamps are parsed from imported text only; missing timezone offsets remain unknown and can affect ordering.",
+                "Phone leads and location records are manually entered from local case data; no phone-number lookup, device access, telecom query or live tracking is performed.",
+                "Location records require an explicit authorization/consent basis, reference, and same-case imported evidence whose SHA-256 matches.",
+                "Case reports may contain sensitive personal and investigative data, including phone numbers and precise location coordinates; store/export only to approved restricted locations.",
             ],
             "limitations": [
                 "This report reflects only locally imported evidence and recorded notes at export time.",
@@ -784,6 +1083,7 @@ class CaseworkWindow:
             ("CORRELATIONS", self.show_correlations, TEAL),
             ("TIMELINE", self.show_timeline, WHITE),
             ("EVIDENCE TIMELINE", self.show_evidence_timeline, CYAN),
+            ("PHONE INTELLIGENCE", self.open_phone_intelligence, VIOLET),
             ("EXPORT CASE REPORT", self.export_case_report, GREEN),
             ("EXPORT AUDIT", self.export_audit, VIOLET),
         ]
@@ -932,7 +1232,8 @@ class CaseworkWindow:
             f"EVIDENCE ITEMS: {summary['evidence_count']}\n"
             f"EXTRACTED INDICATORS: {summary['indicator_count']}\n"
             f"REPEATED INDICATORS ACROSS FILES: {summary['correlation_count']}\n"
-            f"INVESTIGATOR NOTES: {summary['note_count']}\n"
+            f"INVESTIGATOR NOTES: {summary['note_count']}\n"            f"PHONE-NUMBER LEADS: {summary['phone_lead_count']}\n"
+            f"AUTHORIZED LOCATION RECORDS: {summary['location_record_count']}\n"
             + ("\n".join(f"• {note['created_at']} — {note['author']}: {note['note']}" for note in self.store.list_notes(case_id)[:8]) or "No notes recorded.") + "\n\n"
             "INTERPRETATION GUARDRAILS\n"
             "• Shared indicators are leads; shared IPs/domains do not prove a person is responsible.\n"
@@ -1142,6 +1443,23 @@ class CaseworkWindow:
         except Exception as exc:
             messagebox.showerror("Evidence timeline failed", str(exc), parent=self.window)
 
+    def open_phone_intelligence(self):
+        case_id = self._require_case()
+        if not case_id:
+            return
+        try:
+            existing = getattr(self, "phone_intelligence_window", None)
+            if existing is not None and existing.window.winfo_exists():
+                existing.window.lift()
+                existing.load_case(case_id)
+                return
+        except Exception:
+            pass
+        try:
+            self.phone_intelligence_window = PhoneIntelligenceWindow(self.window, self.store, case_id, on_change=self.refresh_cases)
+        except Exception as exc:
+            messagebox.showerror("Phone Intelligence", str(exc), parent=self.window)
+
     def export_case_report(self):
         case_id = self._require_case()
         if not case_id:
@@ -1183,6 +1501,341 @@ class CaseworkWindow:
             return
         messagebox.showinfo("Audit exported", f"Exported {count} audit event(s).\nUse Audit Chain VALID to check the local event chain before export.", parent=self.window)
         self.status_bar.configure(text=f"Audit JSONL exported to {destination}.")
+
+
+class PhoneIntelligenceWindow:
+    """Manual phone-lead and authorized location-evidence desk; no remote device access."""
+
+    def __init__(self, master: Any, store: CaseStore, case_id: str, on_change: Any = None):
+        if tk is None or ttk is None:
+            raise RuntimeError("Tkinter is not available in this Python installation.")
+        self.store = store
+        self.case_id = case_id
+        self.on_change = on_change
+        self.window = tk.Toplevel(master)
+        self.window.title("CYBERAI JARVIS • Phone Intelligence Desk")
+        self.window.geometry("1120x760")
+        self.window.minsize(880, 620)
+        self.window.configure(bg=BG)
+        self._build()
+        self.load_case(case_id)
+
+    def _label(self, parent: Any, text: str, color: str = WHITE, size: int = 9, bold: bool = False):
+        return tk.Label(
+            parent, text=text, bg=parent.cget("bg"), fg=color,
+            font=("Segoe UI", size, "bold" if bold else "normal"),
+            anchor="w", justify="left",
+        )
+
+    def _entry(self, parent: Any, width: int = 24):
+        return tk.Entry(
+            parent, width=width, bg=PANEL_ALT, fg=WHITE, insertbackground=TEAL,
+            relief="flat", highlightthickness=1, highlightbackground=EDGE,
+            highlightcolor=TEAL, font=("Consolas", 9),
+        )
+
+    def _combo(self, parent: Any, values: tuple[str, ...], width: int = 30):
+        widget = ttk.Combobox(parent, values=values, state="readonly", width=width, font=("Segoe UI", 9))
+        if values:
+            widget.current(0)
+        return widget
+
+    def _button(self, parent: Any, text: str, command: Any, color: str = TEAL):
+        return tk.Button(
+            parent, text=text, command=command, bg=PANEL_ALT, fg=color,
+            activebackground=EDGE_BRIGHT, activeforeground=WHITE,
+            relief="flat", bd=0, padx=10, pady=6,
+            font=("Segoe UI", 8, "bold"), cursor="hand2",
+        )
+
+    def _tree(self, parent: Any, columns: tuple[str, ...]):
+        wrapper = tk.Frame(parent, bg=PANEL)
+        wrapper.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        tree = ttk.Treeview(wrapper, columns=columns, show="headings", style="Case.Treeview", height=8)
+        vertical = ttk.Scrollbar(wrapper, orient="vertical", command=tree.yview)
+        horizontal = ttk.Scrollbar(wrapper, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        wrapper.grid_rowconfigure(0, weight=1)
+        wrapper.grid_columnconfigure(0, weight=1)
+        for column in columns:
+            tree.heading(column, text=column.replace("_", " ").upper())
+            tree.column(column, width=130, minwidth=80, anchor="w", stretch=True)
+        return tree
+
+    def _build(self):
+        outer = tk.Frame(self.window, bg=BG, padx=12, pady=10)
+        outer.pack(fill="both", expand=True)
+        self._label(outer, "CYBERAI  /  PHONE INTELLIGENCE", TEAL, 9, True).pack(anchor="w")
+        self.case_heading = self._label(outer, "Case", WHITE, 17, True)
+        self.case_heading.pack(anchor="w", pady=(2, 2))
+        self._label(
+            outer,
+            "LOCAL-ONLY • No number lookup, live tracking, phishing control or remote device access.",
+            AMBER, 8, True,
+        ).pack(anchor="w", pady=(0, 8))
+        self._label(
+            outer,
+            "Location entries require an explicit authority/consent reference and a same-case imported file whose SHA-256 matches.",
+            MUTED, 8,
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.notebook = ttk.Notebook(outer, style="Case.TNotebook")
+        self.notebook.pack(fill="both", expand=True)
+        leads_tab = tk.Frame(self.notebook, bg=BG)
+        locations_tab = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(leads_tab, text="  PHONE NUMBER LEADS  ")
+        self.notebook.add(locations_tab, text="  AUTHORIZED LOCATION RECORDS  ")
+
+        form = tk.Frame(leads_tab, bg=PANEL, padx=10, pady=8, highlightthickness=1, highlightbackground=EDGE)
+        form.pack(fill="x", padx=6, pady=6)
+        self.phone_number_entry = self._entry(form, 25)
+        self.lead_status_combo = self._combo(form, PHONE_LEAD_STATUSES, 25)
+        self.phone_source_entry = self._entry(form, 42)
+        self.phone_legal_combo = self._combo(form, PHONE_LEGAL_BASES, 38)
+        self.phone_authority_entry = self._entry(form, 42)
+        self.phone_notes_entry = self._entry(form, 55)
+        fields = [
+            ("PHONE NUMBER (E.164)", self.phone_number_entry, 0, 0),
+            ("LEAD CLASSIFICATION (NOT A GUILT FINDING)", self.lead_status_combo, 0, 2),
+            ("LEAD SOURCE / PROVENANCE", self.phone_source_entry, 1, 0),
+            ("LEGAL / CONSENT BASIS", self.phone_legal_combo, 1, 2),
+            ("AUTHORITY / REQUEST REFERENCE (WHEN APPLICABLE)", self.phone_authority_entry, 2, 0),
+            ("SHORT NOTE", self.phone_notes_entry, 2, 2),
+        ]
+        for label, widget, row, col in fields:
+            self._label(form, label, MUTED, 7, True).grid(row=row * 2, column=col, sticky="w", padx=(0, 8), pady=(2, 0))
+            widget.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, 8), pady=(0, 4))
+        form.grid_columnconfigure(0, weight=2)
+        form.grid_columnconfigure(2, weight=3)
+        lead_actions = tk.Frame(leads_tab, bg=BG)
+        lead_actions.pack(fill="x", padx=6, pady=(0, 4))
+        self._button(lead_actions, "+ ADD PHONE LEAD", self.add_phone_lead, GREEN).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "LOCATION FOR SELECTED", self.select_location_tab, CYAN).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "CROSS-CASE LINKS", self.show_cross_case_links, VIOLET).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "REFRESH", self.refresh, WHITE).pack(side="left")
+        self.phone_tree = self._tree(leads_tab, ("phone_id", "phone_number", "lead_status", "legal_basis", "source_label", "created_at"))
+        self.phone_tree.bind("<<TreeviewSelect>>", self._on_phone_select)
+        self._label(
+            leads_tab,
+            "Numbers are stored in this local case database. Adding one does not contact it, locate it, or establish who owns it.",
+            MUTED, 8,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+
+        loc_form = tk.Frame(locations_tab, bg=PANEL, padx=10, pady=8, highlightthickness=1, highlightbackground=EDGE)
+        loc_form.pack(fill="x", padx=6, pady=6)
+        self.location_time_entry = self._entry(loc_form, 34)
+        self.location_time_entry.insert(0, datetime.now().astimezone().isoformat(timespec="seconds"))
+        self.latitude_entry = self._entry(loc_form, 14)
+        self.longitude_entry = self._entry(loc_form, 14)
+        self.accuracy_entry = self._entry(loc_form, 12)
+        self.location_source_combo = self._combo(loc_form, LOCATION_SOURCES, 30)
+        self.location_legal_combo = self._combo(loc_form, LOCATION_LEGAL_BASES, 30)
+        self.location_authority_entry = self._entry(loc_form, 32)
+        self.evidence_combo = self._combo(loc_form, (), 52)
+        self.location_notes_entry = self._entry(loc_form, 45)
+        loc_fields = [
+            ("OBSERVED TIME (ISO-8601 WITH TIMEZONE)", self.location_time_entry, 0, 0),
+            ("LATITUDE", self.latitude_entry, 0, 2),
+            ("LONGITUDE", self.longitude_entry, 0, 4),
+            ("ACCURACY METRES (OPTIONAL)", self.accuracy_entry, 0, 6),
+            ("RECORD SOURCE", self.location_source_combo, 1, 0),
+            ("LEGAL / CONSENT BASIS", self.location_legal_combo, 1, 2),
+            ("AUTHORITY / REQUEST REFERENCE (REQUIRED)", self.location_authority_entry, 1, 4),
+            ("IMPORTED EVIDENCE FILE (REQUIRED)", self.evidence_combo, 2, 0),
+            ("NOTE", self.location_notes_entry, 2, 4),
+        ]
+        for label, widget, row, col in loc_fields:
+            self._label(loc_form, label, MUTED, 7, True).grid(row=row * 2, column=col, sticky="w", padx=(0, 8), pady=(2, 0))
+            widget.grid(row=row * 2 + 1, column=col, sticky="ew", padx=(0, 8), pady=(0, 4))
+        for col in (0, 2, 4, 6):
+            loc_form.grid_columnconfigure(col, weight=1)
+        loc_actions = tk.Frame(locations_tab, bg=BG)
+        loc_actions.pack(fill="x", padx=6, pady=(0, 4))
+        self._button(loc_actions, "+ ADD AUTHORIZED LOCATION RECORD", self.add_location_record, GREEN).pack(side="left", padx=(0, 6))
+        self._button(loc_actions, "OPEN SELECTED ON MAP", self.open_selected_map, CYAN).pack(side="left", padx=(0, 6))
+        self._button(loc_actions, "REFRESH", self.refresh, WHITE).pack(side="left")
+        self.location_tree = self._tree(
+            locations_tab,
+            ("location_id", "observed_at_utc", "phone_number", "coordinates", "accuracy_m", "source_label", "evidence_id"),
+        )
+        self._label(
+            locations_tab,
+            "Coordinates come only from manually entered source records; the app does not find a phone's location from its number.",
+            MUTED, 8,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        self.status_bar = self._label(outer, "Ready • choose a case record and use evidence you are authorized to hold.", MUTED, 8)
+        self.status_bar.pack(fill="x", pady=(8, 0))
+
+    def load_case(self, case_id: str):
+        self.case_id = case_id
+        case = self.store.get_case(case_id)
+        self.case_heading.configure(text=f"{case['case_id']}  •  {case['title']}")
+        self.refresh()
+
+    def refresh(self):
+        if not self.window.winfo_exists():
+            return
+        self._clear_tree(self.phone_tree)
+        leads = self.store.list_phone_leads(self.case_id)
+        for item in leads:
+            self.phone_tree.insert("", "end", iid=item["phone_id"], values=(
+                item["phone_id"], item["phone_number"], item["lead_status"],
+                item["legal_basis"], item["source_label"], item["created_at"],
+            ))
+        evidence = self.store.list_evidence(self.case_id)
+        self.evidence_display_to_id = {}
+        evidence_labels = []
+        for item in evidence:
+            label = f"{item['evidence_id']} | {item['original_name']}"
+            evidence_labels.append(label)
+            self.evidence_display_to_id[label] = item["evidence_id"]
+        self.evidence_combo.configure(values=evidence_labels)
+        if evidence_labels and self.evidence_combo.get() not in evidence_labels:
+            self.evidence_combo.set(evidence_labels[0])
+        elif not evidence_labels:
+            self.evidence_combo.set("")
+        self._clear_tree(self.location_tree)
+        for item in self.store.list_location_records(self.case_id):
+            self.location_tree.insert("", "end", iid=item["location_id"], values=(
+                item["location_id"], item["observed_at_utc"], item["phone_number"],
+                f"{item['latitude']:.6f}, {item['longitude']:.6f}",
+                "" if item["accuracy_m"] is None else f"{item['accuracy_m']:g}",
+                item["source_label"], item["evidence_id"],
+            ))
+        self.status_bar.configure(
+            text=f"{len(leads)} phone lead(s) • {len(self.store.list_location_records(self.case_id))} authorized location record(s) • local storage only"
+        )
+
+    def _selected_phone(self) -> str | None:
+        selected = self.phone_tree.selection()
+        return selected[0] if selected else None
+
+    def _on_phone_select(self, _event=None):
+        phone_id = self._selected_phone()
+        if phone_id:
+            self.status_bar.configure(text=f"Selected phone lead {phone_id}. Choose Location for Selected or Cross-Case Links.")
+
+    def select_location_tab(self):
+        if not self._selected_phone():
+            messagebox.showwarning("Select a phone lead", "Select a phone lead first.", parent=self.window)
+            return
+        self.notebook.select(1)
+
+    def show_cross_case_links(self):
+        phone_id = self._selected_phone()
+        if not phone_id:
+            messagebox.showwarning("Select a phone lead", "Select a phone lead first.", parent=self.window)
+            return
+        try:
+            result = self.store.cross_case_phone_links(phone_id)
+            lines = []
+            for item in result["matches"]:
+                current = "CURRENT CASE" if item["case_id"] == self.case_id else "OTHER CASE"
+                lines.append(
+                    f"{current} • {item['case_id']} • {item['case_status']}\n"
+                    f"{item['case_title']}\nLead: {item['phone_id']} • {item['lead_status']}\n"
+                    f"Source: {item['source_label']}\n"
+                )
+            messagebox.showinfo(
+                "Cross-case phone-number links",
+                f"Number: {result['phone_number']}\n"
+                f"Matches: {result['match_count']} across {result['case_count']} case(s) "
+                f"({result['other_case_count']} other case(s)).\n\n"
+                + "\n".join(lines)
+                + "\nINTERPRETATION\n"
+                + result["interpretation"],
+                parent=self.window,
+            )
+        except Exception as exc:
+            messagebox.showerror("Cross-case lookup failed", str(exc), parent=self.window)
+
+    def add_phone_lead(self):
+        try:
+            item = self.store.add_phone_lead(
+                self.case_id, self.phone_number_entry.get(), self.phone_source_entry.get(),
+                self.lead_status_combo.get(), self.phone_legal_combo.get(),
+                self.phone_authority_entry.get(), self.phone_notes_entry.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Phone lead could not be added", str(exc), parent=self.window)
+            return
+        self.phone_number_entry.delete(0, "end")
+        self.phone_source_entry.delete(0, "end")
+        self.phone_authority_entry.delete(0, "end")
+        self.phone_notes_entry.delete(0, "end")
+        self.refresh()
+        self.phone_tree.selection_set(item["phone_id"])
+        self.phone_tree.focus(item["phone_id"])
+        if self.on_change:
+            self.on_change(self.case_id)
+        messagebox.showinfo(
+            "Phone lead recorded",
+            f"Record: {item['phone_id']}\\nNumber saved locally: {item['phone_number']}\\n\\nNo lookup or device connection was attempted.",
+            parent=self.window,
+        )
+
+    def add_location_record(self):
+        phone_id = self._selected_phone()
+        if not phone_id:
+            messagebox.showwarning("Select a phone lead", "Select the phone lead from the Phone Number Leads tab first.", parent=self.window)
+            self.notebook.select(0)
+            return
+        evidence_id = self.evidence_display_to_id.get(self.evidence_combo.get(), "")
+        try:
+            item = self.store.add_location_record(
+                self.case_id, phone_id, self.location_time_entry.get(),
+                self.latitude_entry.get(), self.longitude_entry.get(),
+                self.location_source_combo.get(), self.location_legal_combo.get(),
+                self.location_authority_entry.get(), evidence_id,
+                self.accuracy_entry.get(), self.location_notes_entry.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Location record could not be added", str(exc), parent=self.window)
+            return
+        self.location_notes_entry.delete(0, "end")
+        self.refresh()
+        self.location_tree.selection_set(item["location_id"])
+        self.location_tree.focus(item["location_id"])
+        self.notebook.select(1)
+        if self.on_change:
+            self.on_change(self.case_id)
+        messagebox.showinfo(
+            "Location evidence recorded",
+            f"Record: {item['location_id']}\\nObserved (UTC): {item['observed_at_utc']}\\n"
+            f"Evidence: {item['evidence_id']} / {item['evidence_sha256']}\\n\\n"
+            "This records coordinates already present in authorized evidence; it does not locate a phone.",
+            parent=self.window,
+        )
+
+    def open_selected_map(self):
+        selected = self.location_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select a location record", "Select a location record to continue.", parent=self.window)
+            return
+        try:
+            item = self.store.get_location_record(selected[0])
+            url = openstreetmap_url(item["latitude"], item["longitude"])
+            confirmed = messagebox.askyesno(
+                "Open external map?",
+                "Open these recorded coordinates in OpenStreetMap?\n\n"
+                "The map service will receive the coordinates and may process connection metadata. "
+                "Only continue if sharing these coordinates with the external service is approved.",
+                parent=self.window,
+            )
+            if not confirmed:
+                return
+            self.store.record_location_map_opened(item["location_id"])
+            opened = webbrowser.open(url)
+            if not opened:
+                messagebox.showwarning("Map did not open", "The browser did not confirm opening the map URL.", parent=self.window)
+                return
+            self.status_bar.configure(text=f"Opened external map for {item['location_id']} after operator confirmation.")
+        except Exception as exc:
+            messagebox.showerror("Could not open map", str(exc), parent=self.window)
+
 
 
 def open_casework(master: Any, data_dir: str | Path | None = None) -> CaseworkWindow:
