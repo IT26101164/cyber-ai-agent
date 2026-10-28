@@ -268,6 +268,31 @@ class CaseStoreTests(unittest.TestCase):
         events = [item["event"] for item in self.store.timeline(case["case_id"])]
         self.assertEqual(events[-1], "CASE_REPORT_EXPORTED")
 
+    def test_case_report_includes_phone_and_location_evidence(self):
+        case = self._case()
+        source = self._write(
+            "authorized-location.json",
+            '{"recorded_at":"2026-10-28T10:00:00Z","latitude":6.9271,"longitude":79.8612}'
+        )
+        evidence = self.store.add_evidence(case["case_id"], source, "Authorized provider response REQ-2026-991")
+        lead = self.store.add_phone_lead(
+            case["case_id"], "+94712345678", "Provider response for this case",
+            legal_basis="AUTHORIZED_PROVIDER_RESPONSE", authority_reference="REQ-2026-991",
+        )
+        self.store.add_location_record(
+            case["case_id"], lead["phone_id"], "2026-10-28T10:00:00Z",
+            6.9271, 79.8612, "PROVIDER_RESPONSE", "AUTHORIZED_PROVIDER_RESPONSE",
+            "REQ-2026-991", evidence["evidence_id"], 95,
+        )
+        report_path = self.root / "exports" / "phone-location-report.json"
+        self.store.export_case_report(case["case_id"], report_path)
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["report_schema"], "cyberai.case-report.v3")
+        self.assertEqual(report["phone_leads"][0]["phone_number"], "+94712345678")
+        self.assertEqual(len(report["authorized_location_records"]), 1)
+        self.assertEqual(report["authorized_location_records"][0]["evidence_sha256"], evidence["sha256"])
+        self.assertTrue(any("sensitive personal" in item.lower() for item in report["interpretation_guardrails"]))
+
     def test_case_report_export_refuses_vault_and_overwrite(self):
         case = self._case()
         with self.assertRaises(ValueError):
