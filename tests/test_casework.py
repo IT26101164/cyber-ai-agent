@@ -172,7 +172,7 @@ class CaseStoreTests(unittest.TestCase):
 
     def test_case_report_export_contains_metadata_and_records_export(self):
         case = self._case()
-        source = self._write("login.log", "Connection from 198.51.100.22 to https://example.invalid/login")
+        source = self._write("login.log", "2026-10-28T10:30:00Z Connection from 198.51.100.22 to https://example.invalid/login")
         evidence = self.store.add_evidence(case["case_id"], source, "Victim-provided log")
         self.store.add_note(case["case_id"], "Compare the login time with the transaction record.")
         destination = self.root / "exports" / "case-report.json"
