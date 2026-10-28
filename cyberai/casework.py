@@ -29,6 +29,25 @@ except ImportError:  # Importable in headless CI for pure storage tests.
     filedialog = messagebox = simpledialog = None  # type: ignore[assignment]
 
 
+# Reuse the visual language of the JARVIS SOC screen without importing its UI module.
+BG = "#050A10"
+SIDEBAR = "#070F17"
+PANEL = "#091820"
+PANEL_ALT = "#0D242D"
+EDGE = "#173740"
+EDGE_BRIGHT = "#23616A"
+TEAL = "#37E6D0"
+CYAN = "#47CDE2"
+GREEN = "#54F5C3"
+AMBER = "#F2C66D"
+RED = "#FF657A"
+VIOLET = "#AA98FF"
+WHITE = "#ECF7F8"
+MUTED = "#91AEB4"
+DIM = "#58777E"
+FAINT = "#142D35"
+
+
 CASE_STATUSES = ("OPEN", "INVESTIGATING", "AWAITING_LEGAL_PROCESS", "CLOSED")
 TEXT_EXTENSIONS = {".txt", ".log", ".csv", ".json", ".eml", ".html", ".htm", ".xml", ".md"}
 MAX_EVIDENCE_BYTES = 100 * 1024 * 1024
