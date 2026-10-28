@@ -18,9 +18,9 @@ This is a defensive research starter, not a fully autonomous penetration-testing
 ## Quick setup (Windows PowerShell)
 
 1. Install **Python 3.12+** from https://www.python.org/downloads/windows/ and **Ollama** from https://ollama.com/download/windows.
-2. Download/clone this repository and open PowerShell in its folder.
-3. Run `.`\`setup.ps1` in PowerShell. If scripts are blocked, first run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
-4. Start the agent with `.`\`run.ps1`.
+2. Download or clone this repository and open PowerShell in its folder.
+3. Run this command: ` .\setup.ps1` (omit the leading space inside the code formatting). If scripts are blocked, first run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+4. Start the agent with ` .\run.ps1` (omit the leading space inside the code formatting).
 
 ## Commands
 
