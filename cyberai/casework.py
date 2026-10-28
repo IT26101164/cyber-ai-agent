@@ -312,6 +312,36 @@ class CaseStore:
                     value TEXT NOT NULL,
                     UNIQUE(evidence_id, indicator_type, value)
                 );
+                CREATE TABLE IF NOT EXISTS phone_leads (
+                    phone_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL REFERENCES cases(case_id),
+                    phone_number TEXT NOT NULL,
+                    lead_status TEXT NOT NULL CHECK(lead_status IN ('UNVERIFIED','COMPLAINANT','WITNESS','CONTACT','SUBJECT_OF_INQUIRY')),
+                    source_label TEXT NOT NULL,
+                    legal_basis TEXT NOT NULL CHECK(legal_basis IN ('LEAD_ONLY_NOT_LOCATION_AUTHORITY','CONSENT','WARRANT_OR_COURT_ORDER','AUTHORIZED_PROVIDER_RESPONSE','OTHER_REVIEWED')),
+                    authority_reference TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    UNIQUE(case_id, phone_number)
+                );
+                CREATE TABLE IF NOT EXISTS location_records (
+                    location_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL REFERENCES cases(case_id),
+                    phone_id TEXT NOT NULL REFERENCES phone_leads(phone_id),
+                    observed_at_utc TEXT NOT NULL,
+                    latitude REAL NOT NULL CHECK(latitude >= -90 AND latitude <= 90),
+                    longitude REAL NOT NULL CHECK(longitude >= -180 AND longitude <= 180),
+                    accuracy_m REAL,
+                    source_label TEXT NOT NULL CHECK(source_label IN ('PROVIDER_RESPONSE','CONSENTED_DEVICE_EXPORT','OFFICER_ENTERED_FROM_RECORD','OTHER_AUTHORIZED_SOURCE')),
+                    legal_basis TEXT NOT NULL CHECK(legal_basis IN ('CONSENT','WARRANT_OR_COURT_ORDER','AUTHORIZED_PROVIDER_RESPONSE','OTHER_REVIEWED')),
+                    authority_reference TEXT NOT NULL,
+                    evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
+                    evidence_sha256 TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS notes (
                     note_id TEXT PRIMARY KEY,
                     case_id TEXT NOT NULL REFERENCES cases(case_id),
@@ -330,6 +360,9 @@ class CaseStore:
                     prev_hash TEXT NOT NULL,
                     event_hash TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_phone_leads_case ON phone_leads(case_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_location_case_time ON location_records(case_id, observed_at_utc);
+                CREATE INDEX IF NOT EXISTS idx_location_phone_time ON location_records(phone_id, observed_at_utc);
                 CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence(case_id, collected_at);
                 CREATE INDEX IF NOT EXISTS idx_indicators_case_value ON indicators(case_id, indicator_type, value);
                 CREATE INDEX IF NOT EXISTS idx_audit_case ON audit_events(case_id, seq);
