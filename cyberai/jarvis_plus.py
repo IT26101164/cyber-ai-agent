@@ -321,8 +321,11 @@ class JarvisPlus:
         self.insight_list.pack(fill="both", expand=True, pady=(5, 0))
         attack = self.panel(right, "06  /  RESPONSE WORKFLOW", "Advisory only • no automatic remediation")
         attack.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
-        self.workflow = tk.Canvas(attack, bg=PANEL, height=65, highlightthickness=0)
-        self.workflow.pack(fill="both", expand=True, pady=(4, 0))
+        self.workflow = tk.Canvas(attack, bg=PANEL, height=48, highlightthickness=0)
+        self.workflow.pack(fill="x", expand=False, pady=(4, 0))
+        self.timeline = tk.Listbox(attack, bg=PANEL, fg=GREEN, selectbackground="#23405a",
+                                   font=("Consolas", 7), relief="flat", height=3, highlightthickness=0)
+        self.timeline.pack(fill="both", expand=True, pady=(3, 0))
         controls = tk.Frame(main, bg=BG)
         controls.grid(row=4, column=0, sticky="ew", pady=(7, 0))
         self.button(controls, "RUN SYNTHETIC FLOW", self.simulate, GREEN).pack(side="left")
