@@ -748,6 +748,35 @@ class CaseStore:
             raise KeyError(f"Unknown phone lead: {phone_id}")
         return dict(row)
 
+    def cross_case_phone_links(self, phone_id: str) -> dict[str, Any]:
+        """Find exact normalized-number repeats in this local case register; not identity attribution."""
+        selected = self.get_phone_lead(phone_id)
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT p.phone_id,p.case_id,p.lead_status,p.source_label,p.legal_basis,p.created_at,"
+                "c.title AS case_title,c.status AS case_status "
+                "FROM phone_leads p JOIN cases c ON c.case_id=p.case_id "
+                "WHERE p.phone_number=? ORDER BY p.case_id,p.created_at,p.phone_id",
+                (selected["phone_number"],),
+            ).fetchall()
+        matches = [dict(row) for row in rows]
+        case_ids = {item["case_id"] for item in matches}
+        other_case_ids = case_ids - {selected["case_id"]}
+        return {
+            "phone_id": phone_id,
+            "phone_number": selected["phone_number"],
+            "match_count": len(matches),
+            "case_count": len(case_ids),
+            "other_case_count": len(other_case_ids),
+            "matches": matches,
+            "interpretation": (
+                "Exact normalized phone number repeats in the local case register. "
+                "This is a lead for analyst review, not proof of common ownership, device control, "
+                "identity, intent, or involvement in an offence. Consider number recycling, spoofing, "
+                "shared phones and data-entry errors."
+            ),
+        }
+
     def list_phone_leads(self, case_id: str) -> list[dict[str, Any]]:
         self.get_case(case_id)
         with closing(self._connect()) as con:
@@ -1584,7 +1613,9 @@ class PhoneIntelligenceWindow:
         lead_actions = tk.Frame(leads_tab, bg=BG)
         lead_actions.pack(fill="x", padx=6, pady=(0, 4))
         self._button(lead_actions, "+ ADD PHONE LEAD", self.add_phone_lead, GREEN).pack(side="left", padx=(0, 6))
-        self._button(lead_actions, "REFRESH", self.refresh, CYAN).pack(side="left")
+        self._button(lead_actions, "LOCATION FOR SELECTED", self.select_location_tab, CYAN).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "CROSS-CASE LINKS", self.show_cross_case_links, VIOLET).pack(side="left", padx=(0, 6))
+        self._button(lead_actions, "REFRESH", self.refresh, WHITE).pack(side="left")
         self.phone_tree = self._tree(leads_tab, ("phone_id", "phone_number", "lead_status", "legal_basis", "source_label", "created_at"))
         self.phone_tree.bind("<<TreeviewSelect>>", self._on_phone_select)
         self._label(
@@ -1685,7 +1716,41 @@ class PhoneIntelligenceWindow:
     def _on_phone_select(self, _event=None):
         phone_id = self._selected_phone()
         if phone_id:
-            self.notebook.select(1)
+            self.status_bar.configure(text=f"Selected phone lead {phone_id}. Choose Location for Selected or Cross-Case Links.")
+
+    def select_location_tab(self):
+        if not self._selected_phone():
+            messagebox.showwarning("Select a phone lead", "Select a phone lead first.", parent=self.window)
+            return
+        self.notebook.select(1)
+
+    def show_cross_case_links(self):
+        phone_id = self._selected_phone()
+        if not phone_id:
+            messagebox.showwarning("Select a phone lead", "Select a phone lead first.", parent=self.window)
+            return
+        try:
+            result = self.store.cross_case_phone_links(phone_id)
+            lines = []
+            for item in result["matches"]:
+                current = "CURRENT CASE" if item["case_id"] == self.case_id else "OTHER CASE"
+                lines.append(
+                    f"{current} • {item['case_id']} • {item['case_status']}\n"
+                    f"{item['case_title']}\nLead: {item['phone_id']} • {item['lead_status']}\n"
+                    f"Source: {item['source_label']}\n"
+                )
+            messagebox.showinfo(
+                "Cross-case phone-number links",
+                f"Number: {result['phone_number']}\n"
+                f"Matches: {result['match_count']} across {result['case_count']} case(s) "
+                f"({result['other_case_count']} other case(s)).\n\n"
+                + "\n".join(lines)
+                + "\nINTERPRETATION\n"
+                + result["interpretation"],
+                parent=self.window,
+            )
+        except Exception as exc:
+            messagebox.showerror("Cross-case lookup failed", str(exc), parent=self.window)
 
     def add_phone_lead(self):
         try:
