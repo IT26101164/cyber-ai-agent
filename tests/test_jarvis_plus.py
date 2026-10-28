@@ -1,6 +1,12 @@
 import unittest
 
-from cyberai.jarvis_plus import assess_connections, parse_json_rows, simulated_hops
+from cyberai.jarvis_plus import (
+    _state_name,
+    assess_connections,
+    parse_json_rows,
+    protocol_summary,
+    simulated_hops,
+)
 
 
 class JarvisPlusHelperTests(unittest.TestCase):
@@ -8,9 +14,17 @@ class JarvisPlusHelperTests(unittest.TestCase):
         self.assertEqual(parse_json_rows(""), [])
         self.assertEqual(parse_json_rows('{"Id":1}'), [{"Id": 1}])
 
+    def test_parse_array(self):
+        self.assertEqual(parse_json_rows('[{"Id":1},{"Id":2}]'), [{"Id": 1}, {"Id": 2}])
+
     def test_parse_rejects_wrong_shape(self):
         with self.assertRaises(ValueError):
             parse_json_rows('"text"')
+
+    def test_state_normalization(self):
+        self.assertEqual(_state_name("Listen"), "LISTEN")
+        self.assertEqual(_state_name("Established"), "ESTABLISHED")
+        self.assertEqual(_state_name("5"), "ESTABLISHED")
 
     def test_assess_returns_explained_hint_not_malware_claim(self):
         rows = [{"LocalAddress":"0.0.0.0","LocalPort":8080,"RemoteAddress":"0.0.0.0",
@@ -20,8 +34,17 @@ class JarvisPlusHelperTests(unittest.TestCase):
         self.assertIn("verify", findings[0]["reason"])
         self.assertEqual(findings[0]["process"], "demo")
 
+    def test_established_external_connection_alone_is_not_an_alert(self):
+        rows = [{"LocalAddress":"192.168.1.10","LocalPort":50000,"RemoteAddress":"203.0.113.8",
+                 "RemotePort":443,"State":"Established","OwningProcess":44}]
+        self.assertEqual(assess_connections(rows, {"44":"browser"}), [])
+
     def test_assess_empty_is_empty(self):
         self.assertEqual(assess_connections([]), [])
+
+    def test_protocol_summary_uses_destination_port_metadata(self):
+        rows = [{"RemotePort":443},{"RemotePort":443},{"RemotePort":53},{"RemotePort":12345}]
+        self.assertEqual(protocol_summary(rows), [("HTTPS/TLS", 2), ("DNS/TCP", 1), ("Other TCP", 1)])
 
     def test_simulation_is_synthetic(self):
         hops = simulated_hops()
