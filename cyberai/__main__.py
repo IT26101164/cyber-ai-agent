@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from cyberai.audit import AuditLog
+from cyberai.agent import PlanStore
 from cyberai.defense import analyze_log
 from cyberai.llm import ModelError, ask_cloud, ask_local
 from cyberai.memory import MemoryStore
@@ -12,6 +13,7 @@ from cyberai.simulator import simulate
 
 ROOT = Path(__file__).resolve().parent.parent
 MEMORY = MemoryStore(ROOT / "data" / "memory.db")
+PLANS = PlanStore(ROOT / "data" / "plans.json")
 AUDIT = AuditLog(ROOT / "logs" / "audit.jsonl")
 LOG_DIR = ROOT / "logs"
 
@@ -24,6 +26,10 @@ def help_text() -> str:
   /incident TYPE      Show an incident-response checklist
   /simulate SCENARIO  Run a synthetic red/blue-team exercise (no real attack)
   /healthcheck        Read Windows Defender, Firewall, and Update service status
+  /plan GOAL          Create a defensive plan for human review (no actions run)
+  /plans              List saved plans and their review status
+  /approve PLAN_ID    Approve a plan for manual follow-through only
+  /reject PLAN_ID     Reject a pending plan
   /research HTTPS_URL Fetch a page from an allowlisted HTTPS documentation host
   /cloud TEXT         Send a prompt to the configured cloud model
   /help               Show commands
@@ -82,6 +88,28 @@ def main() -> None:
                     findings=len(result.get("findings", [])),
                 )
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+            elif line.startswith("/plan "):
+                goal = line[len("/plan "):].strip()
+                result = PLANS.create(goal, ask_local)
+                AUDIT.write("plan_created", plan_id=result["id"], status=result["status"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+                print("\\nNo commands or actions were executed. Approval is for manual follow-through only.")
+            elif line == "/plans":
+                plans = PLANS.list()
+                summary = [{
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "goal": item.get("goal"),
+                    "summary": item.get("summary"),
+                } for item in plans]
+                print(json.dumps(summary, indent=2, ensure_ascii=False))
+                AUDIT.write("plans_listed", count=len(summary))
+            elif line.startswith("/approve ") or line.startswith("/reject "):
+                decision, plan_id = line[1:].split(" ", 1)
+                result = PLANS.review(plan_id, decision)
+                AUDIT.write("plan_reviewed", plan_id=result["id"], decision=decision, status=result["status"])
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+                print("Approval never runs commands. Carry out steps manually and only within your authorized scope.")
             elif line.startswith("/research "):
                 result = fetch_public_page(line[len("/research "):].strip())
                 MEMORY.remember(f"Source: {result['url']}\nContent: {result['text'][:7000]}", "research")
