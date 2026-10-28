@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import uuid
+import webbrowser
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,24 @@ URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>\"']+")
 EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,63}\b")
 DOMAIN_RE = re.compile(r"(?i)(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?![\w.-])")
 SHA256_RE = re.compile(r"(?i)\b[a-f0-9]{64}\b")
+PHONE_RE = re.compile(r"(?<![\w+])\+(?:\d[\s().-]?){7,18}\d(?!\w)")
+
+PHONE_LEAD_STATUSES = (
+    "UNVERIFIED", "COMPLAINANT", "WITNESS", "CONTACT", "SUBJECT_OF_INQUIRY",
+)
+PHONE_LEGAL_BASES = (
+    "LEAD_ONLY_NOT_LOCATION_AUTHORITY", "CONSENT", "WARRANT_OR_COURT_ORDER",
+    "AUTHORIZED_PROVIDER_RESPONSE", "OTHER_REVIEWED",
+)
+LOCATION_SOURCES = (
+    "PROVIDER_RESPONSE", "CONSENTED_DEVICE_EXPORT",
+    "OFFICER_ENTERED_FROM_RECORD", "OTHER_AUTHORIZED_SOURCE",
+)
+LOCATION_LEGAL_BASES = (
+    "CONSENT", "WARRANT_OR_COURT_ORDER",
+    "AUTHORIZED_PROVIDER_RESPONSE", "OTHER_REVIEWED",
+)
+
 
 # Require a full calendar date; ambiguous syslog fragments without a year are ignored.
 ISO_TIMESTAMP_RE = re.compile(
@@ -118,6 +137,10 @@ def extract_indicators(text: str) -> list[tuple[str, str]]:
             pass
     for match in SHA256_RE.findall(text):
         found.add(("sha256", match.lower()))
+    for match in PHONE_RE.findall(text):
+        digits = re.sub(r"\D", "", match)
+        if 8 <= len(digits) <= 15 and digits[0] != "0":
+            found.add(("phone", "+" + digits))
     for match in DOMAIN_RE.findall(text):
         domain = match.rstrip(".").lower()
         if domain and "@" not in domain:
@@ -172,6 +195,55 @@ def extract_timestamps(text: str) -> list[dict[str, Any]]:
                 "context": raw_line.strip()[:600],
             })
     return events
+
+
+def normalize_phone_number(value: str) -> str:
+    """Normalize an explicitly international telephone number to E.164.
+
+    The tool does not infer a country code from caller location or a number prefix.
+    """
+    raw = str(value or "").strip()
+    if raw.startswith("00"):
+        raw = "+" + raw[2:]
+    cleaned = re.sub(r"[\s().-]", "", raw)
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", cleaned):
+        raise ValueError("Enter an international number in E.164 format, e.g. +94712345678.")
+    return cleaned
+
+
+def validate_authority_reference(legal_basis: str, reference: str, *, location: bool = False) -> str:
+    """Require a traceable reference for authorization-dependent work."""
+    allowed = LOCATION_LEGAL_BASES if location else PHONE_LEGAL_BASES
+    if legal_basis not in allowed:
+        raise ValueError("Select a supported legal/consent basis.")
+    clean_ref = str(reference or "").strip()
+    if legal_basis != "LEAD_ONLY_NOT_LOCATION_AUTHORITY" and len(clean_ref) < 3:
+        raise ValueError("Enter the relevant consent, warrant/order, provider-request or reviewed-authority reference.")
+    if location and len(clean_ref) < 3:
+        raise ValueError("Location records require an authorization/consent reference.")
+    if len(clean_ref) > 300:
+        raise ValueError("Authority reference must be 300 characters or fewer.")
+    return clean_ref
+
+
+def parse_explicit_datetime(value: str) -> datetime:
+    """Parse an ISO-8601 datetime only when its timezone offset is explicit."""
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Use ISO-8601 date/time with an explicit timezone, e.g. 2026-10-28T15:30:00+05:30.") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Timestamp must include a timezone offset; timezone-naive times are not accepted.")
+    return parsed.astimezone(timezone.utc)
+
+
+def openstreetmap_url(latitude: float, longitude: float) -> str:
+    """Return a map URL for manually supplied coordinates, never a phone-number lookup."""
+    lat, lon = float(latitude), float(longitude)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("Coordinates are outside valid latitude/longitude ranges.")
+    return f"https://www.openstreetmap.org/?mlat={lat:.6f}&mlon={lon:.6f}#map=16/{lat:.6f}/{lon:.6f}"
 
 
 class CaseStore:
