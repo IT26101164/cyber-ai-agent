@@ -189,8 +189,8 @@ class JarvisPlus:
     def __init__(self, root: Any):
         self.root = root
         self.root.title("CYBERAI JARVIS | Incident Management")
-        self.root.geometry("1510x920")
-        self.root.minsize(1120, 720)
+        self.root.geometry("1420x860")
+        self.root.minsize(1050, 680)
         self.root.configure(bg=BG)
         self.rows: list[dict[str, Any]] = []
         self.names: dict[str, str] = {}
@@ -377,7 +377,7 @@ class JarvisPlus:
         legend.pack(fill="x", pady=(0, 3))
         self._label(legend, "● REVIEW", RED, 6, True).pack(side="right", padx=(6, 0))
         self._label(legend, "● NORMAL", GREEN, 6, True).pack(side="right")
-        self.topology_canvas = tk.Canvas(topology_body, bg=PANEL, height=105, highlightthickness=0)
+        self.topology_canvas = tk.Canvas(topology_body, bg=PANEL, height=125, highlightthickness=0)
         self.topology_canvas.pack(fill="x", expand=False)
         self.topology_canvas.bind("<Configure>", lambda _e: self._draw_topology())
         self._label(topology_body, "RECENT REVIEW HINTS", AMBER, 7, True).pack(anchor="w", pady=(3, 2))
@@ -548,7 +548,7 @@ class JarvisPlus:
         if not c.winfo_exists():
             return
         c.delete("all")
-        w, h = max(c.winfo_width(), 320), max(c.winfo_height(), 145)
+        w, h = max(c.winfo_width(), 320), max(c.winfo_height(), 120)
         pts = {
             "DEVICE": (w*.10, h*.56, TEAL),
             "FIREWALL": (w*.29, h*.42, GREEN),
@@ -556,7 +556,7 @@ class JarvisPlus:
             "WS-001": (w*.68, h*.24, CYAN),
             "DB-PROD": (w*.70, h*.70, AMBER),
             "CLOUD": (w*.89, h*.42, GREEN),
-            "FIN-SRV": (w*.48, h*.83, RED),
+            "FIN-SRV": (w*.48, h*.73, RED),
         }
         def path(a: str, b: str, color: str, bend: float = 0):
             x1,y1,_=pts[a]; x2,y2,_=pts[b]
